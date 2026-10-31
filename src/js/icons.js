@@ -31,6 +31,18 @@ export const icon = {
   restore: (n = 16) => s(n, '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>'),
   note: (n = 16) => s(n, '<path d="M5 3h10l4 4v14H5z"/><path d="M15 3v4h4M9 12h6M9 16h6"/>'),
   sparkle: (n = 16) => s(n, '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z"/>'),
+  music: (n = 20) => s(n, '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>'),
+  skin: (n = 20) => s(n, '<rect x="8" y="3" width="8" height="7"/><rect x="7" y="10" width="10" height="7"/><path d="M9 17v4M15 17v4"/>'),
+  news: (n = 20) => s(n, '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M8 9h8M8 13h8M8 17h5"/>'),
+  trophy: (n = 18) => s(n, '<path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 21h8M9 17h6v4H9z"/>'),
+  heart: (n = 16) => s(n, '<path d="M12 20s-7-4.4-9-9a5 5 0 0 1 9-3 5 5 0 0 1 9 3c-2 4.6-9 9-9 9z"/>', 'stroke-width="2"'),
+  shuffle: (n = 16) => s(n, '<path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>', 'stroke-width="2"'),
+  repeat: (n = 16) => s(n, '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>', 'stroke-width="2"'),
+  moonSleep: (n = 16) => s(n, '<path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z"/>'),
+  volume: (n = 16) => s(n, '<path d="M11 5L6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7"/>', 'stroke-width="2"'),
+  prev: (n = 16) => `<svg width="${n}" height="${n}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>`,
+  next: (n = 16) => `<svg width="${n}" height="${n}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>`,
+  pause: (n = 16) => `<svg width="${n}" height="${n}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`,
 };
 
 /** Ночной пейзаж для большой карточки на главной. */
@@ -41,3 +53,33 @@ export const heroArt = `<svg viewBox="0 0 1000 280" preserveAspectRatio="xMidYMa
   <path d="M0 210 h80 v-20 h80 v-30 h80 v20 h80 v-40 h80 v30 h80 v-20 h80 v40 h80 v-30 h80 v20 h80 v-10 h120 V280 H0z" fill="rgba(10,10,30,0.55)"/>
   <path d="M0 240 h120 v-20 h100 v10 h120 v-30 h100 v20 h140 v-10 h120 v20 h140 v-10 h160 V280 H0z" fill="rgba(6,6,20,0.8)"/>
 </svg>`;
+
+// ---------- Пиксельные картинки сборок ----------
+// Палитры для шести цветов обложки (как TINTS): небо, трава, земля, листва, акцент
+const SCENES = [
+  ['#183A60', '#2E5B34', '#5A3E28', '#244F28', '#F2E3A1'],
+  ['#3A2A4A', '#5A3B5A', '#3A2618', '#7A3A5A', '#F2C1E0'],
+  ['#163C3A', '#2D6B4E', '#3E2E1E', '#1E4D3A', '#BFF2D5'],
+  ['#2A1420', '#5A2630', '#2A1A14', '#7A2E3B', '#F2A0A0'],
+  ['#3A2A14', '#7A6A2E', '#5A3E1E', '#A8792E', '#FFE9A8'],
+  ['#14223F', '#2E4A7A', '#2A2A3A', '#3E5FA0', '#CFE0FF'],
+];
+
+/** Маленький значок сборки 4×4 пикселя */
+export function tintIcon(n = 0) {
+  const [sky, grass, dirt, leaf, acc] = SCENES[n % SCENES.length];
+  return `<svg viewBox="0 0 4 4" shape-rendering="crispEdges" aria-hidden="true"><rect width="4" height="4" fill="${sky}"/><rect y="2" width="4" height="2" fill="${dirt}"/><rect y="2" width="4" height="1" fill="${grass}"/><rect x="1" width="2" height="2" fill="${leaf}"/><rect x="3" width="1" height="1" fill="${acc}"/></svg>`;
+}
+
+/** Пиксельный пейзаж для большой обложки сборки */
+export function pixelScene(n = 0) {
+  const [sky, grass, dirt, leaf, acc] = SCENES[n % SCENES.length];
+  return `<svg class="scene" viewBox="0 0 64 24" preserveAspectRatio="xMidYMax slice" shape-rendering="crispEdges" aria-hidden="true">
+    <rect width="64" height="24" fill="${sky}"/><rect y="6" width="64" height="4" fill="${sky}" opacity=".8"/>
+    <rect x="50" y="3" width="3" height="3" fill="${acc}"/><rect x="12" y="4" width="5" height="1" fill="#DCE6F5" opacity=".7"/><rect x="30" y="6" width="7" height="1" fill="#DCE6F5" opacity=".6"/>
+    <rect y="15" width="64" height="9" fill="${grass}"/><rect y="15" width="64" height="1" fill="${leaf}"/><rect y="18" width="64" height="6" fill="${dirt}"/>
+    <rect x="4" y="9" width="5" height="5" fill="${leaf}"/><rect x="6" y="14" width="1" height="1" fill="${dirt}"/>
+    <rect x="40" y="10" width="4" height="4" fill="${leaf}"/><rect x="41" y="14" width="1" height="1" fill="${dirt}"/>
+    <rect x="22" y="11" width="7" height="4" fill="#9A7A50"/><rect x="21" y="10" width="9" height="1" fill="#7A3434"/><rect x="25" y="13" width="2" height="2" fill="#3A2818"/>
+  </svg>`;
+}

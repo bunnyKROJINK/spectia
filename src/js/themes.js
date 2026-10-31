@@ -68,9 +68,22 @@ export const THEMES = {
     accent: '#FF9A3C', accentInk: '#1A0C03', accentSoft: 'rgba(255,154,60,0.16)', accentText: '#FFD0A3',
     glow: 'rgba(255,154,60,0.34)', avatar: 'linear-gradient(135deg,#E06A12,#7A3DB0)',
     navText: '#E5CDB8', muted: '#C9AE98' },
+  // Градиентные темы: второй цвет акцента и мягкий переход фона
+  sunset: { ...DARK, bgMode: 'diagonal',
+    bg: '#1A0E14', bg2: '#2A1220', dialog: '#2A1620', g1: 'rgba(255,140,80,0.22)', g2: 'rgba(255,90,150,0.18)',
+    accent: '#FF9A55', accent2: '#FF5C9A', accentInk: '#1A0A0C', accentSoft: 'rgba(255,130,100,0.16)', accentText: '#FFC9AE',
+    glow: 'rgba(255,120,110,0.34)', avatar: 'linear-gradient(135deg,#E8743A,#D63C7A)', navText: '#E8CCD2', muted: '#CDA9B2' },
+  aurora: { ...DARK, bgMode: 'glow',
+    bg: '#06121A', bg2: '#120C24', dialog: '#0F1E2A', g1: 'rgba(60,230,160,0.22)', g2: 'rgba(150,90,255,0.24)',
+    accent: '#4FE3A8', accent2: '#A07CFF', accentInk: '#04140F', accentSoft: 'rgba(79,227,168,0.15)', accentText: '#B5F5DC',
+    glow: 'rgba(110,200,220,0.34)', avatar: 'linear-gradient(135deg,#25B47E,#7A4FE0)', navText: '#C3DCE0', muted: '#9DBAC2' },
+  deep: { ...DARK, bgMode: 'vertical',
+    bg: '#071224', bg2: '#04202A', dialog: '#0E1E33', g1: 'rgba(60,140,255,0.2)', g2: 'rgba(40,210,210,0.18)',
+    accent: '#4C9BFF', accent2: '#39D5D0', accentInk: '#04101F', accentSoft: 'rgba(76,155,255,0.16)', accentText: '#BCD9FF',
+    glow: 'rgba(60,180,230,0.34)', avatar: 'linear-gradient(135deg,#2F6FD6,#1FA8A4)', navText: '#C1D2E4', muted: '#9DB1C8' },
 };
 
-export const THEME_ORDER = ['night', 'emerald', 'sakura', 'ruby', 'amethyst', 'space', 'ocean', 'halloween', 'light', 'midnight'];
+export const THEME_ORDER = ['night', 'emerald', 'sakura', 'ruby', 'amethyst', 'space', 'ocean', 'halloween', 'sunset', 'aurora', 'deep', 'light', 'midnight'];
 
 /** Переводит camelCase в kebab-case: accentInk → accent-ink */
 const kebab = (s) => s.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
@@ -80,7 +93,7 @@ export function applyTheme(id) {
   const theme = THEMES[id] || THEMES.sakura;
   const root = document.documentElement;
   for (const [key, value] of Object.entries(theme)) {
-    if (key !== 'scheme' && key !== 'deco') root.style.setProperty('--' + kebab(key), value);
+    if (key !== 'scheme' && key !== 'deco' && key !== 'bgMode' && key !== 'accent2' && key !== 'bg2') root.style.setProperty('--' + kebab(key), value);
   }
   root.style.colorScheme = theme.scheme;
 }

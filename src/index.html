@@ -12,10 +12,13 @@
   <div id="bgimg" aria-hidden="true"></div>
   <div class="app">
     <div id="deco" aria-hidden="true"></div>
-    <header id="titlebar" class="titlebar" data-tauri-drag-region></header>
     <div class="body">
-      <nav id="sidebar" class="sidebar panel"></nav>
-      <main id="content" class="content"></main>
+      <nav id="rail" class="rail"></nav>
+      <aside id="sidebar" class="sidebar"></aside>
+      <div class="mainwrap">
+        <header id="titlebar" class="titlebar" data-tauri-drag-region></header>
+        <main id="content" class="content"></main>
+      </div>
     </div>
   </div>
   <div id="overlay"></div>

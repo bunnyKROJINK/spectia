@@ -29,23 +29,35 @@ function accentVars(accent, bg) {
   };
 }
 
-/** Делает полную тему из трёх цветов редактора: фон, акцент, текст. */
-export function themeFromColors({ bg, accent, text }) {
+/**
+ * Делает полную тему из цветов редактора. Обязательны фон, акцент и текст;
+ * остальное — по желанию: второй цвет фона и вид градиента, второй цвет акцента,
+ * цвет карточек, узор, объём и свечение.
+ */
+export function themeFromColors(t) {
+  const { bg, accent, text } = t;
   const light = lum(bg) > 0.5;
   const base = light ? THEMES.light : THEMES.night;
   return {
     ...base,
     scheme: light ? 'light' : 'dark',
     bg,
-    dialog: light ? '#FFFFFF' : mix(bg, '#FFFFFF', 0.07),
+    dialog: light ? '#FFFFFF' : mix(t.card || bg, '#FFFFFF', 0.06),
     g1: rgba(accent, light ? 0.18 : 0.26),
-    g2: rgba(mix(accent, '#3080FF', 0.5), light ? 0.14 : 0.2),
+    g2: rgba(t.accent2 || mix(accent, '#3080FF', 0.5), light ? 0.14 : 0.2),
     text,
     muted: mix(text, bg, 0.3),
     navText: mix(text, bg, 0.16),
     navOn: text,
-    avatar: `linear-gradient(135deg,${mix(accent, '#000000', 0.25)},${mix(accent, '#3080FF', 0.45)})`,
+    avatar: `linear-gradient(135deg,${mix(accent, '#000000', 0.25)},${mix(t.accent2 || accent, '#3080FF', 0.45)})`,
     ...accentVars(accent, bg),
+    accent2: t.accent2 || '',
+    bg2: t.bg2 || '',
+    bgMode: t.bgMode || 'glow',
+    card: t.card || '',
+    pattern: t.pattern,
+    depth: t.depth,
+    glowLevel: t.glow,
   };
 }
 
@@ -59,6 +71,24 @@ export function resolveTheme(settings) {
   return THEMES[id] || THEMES.sakura;
 }
 
+// ---------- Узоры на фоне ----------
+
+function patternCss(kind, light) {
+  const ink = light ? 'rgba(20,24,60,.07)' : 'rgba(255,255,255,.045)';
+  switch (kind) {
+    case 'dots': return `radial-gradient(${ink} 1.2px, transparent 1.4px) 0 0 / 18px 18px`;
+    case 'grid': return `linear-gradient(${ink} 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, ${ink} 1px, transparent 1px) 0 0 / 28px 28px`;
+    case 'pixels': return `linear-gradient(45deg, ${ink} 25%, transparent 25%, transparent 75%, ${ink} 75%) 0 0 / 16px 16px, linear-gradient(45deg, ${ink} 25%, transparent 25%, transparent 75%, ${ink} 75%) 8px 8px / 16px 16px`;
+    case 'stars': {
+      const st = light ? 'rgba(20,24,60,.12)' : 'rgba(255,255,255,.35)';
+      return [[13, 21], [71, 9], [42, 63], [88, 47], [27, 86], [60, 32], [5, 55], [80, 80]]
+        .map(([x, y], n) => `radial-gradient(${n % 3 ? 1 : 1.5}px ${n % 3 ? 1 : 1.5}px at ${x}% ${y}%, ${st}, transparent)`)
+        .join(', ');
+    }
+    default: return '';
+  }
+}
+
 // ---------- Применение ----------
 
 const kebab = (s) => s.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
@@ -68,14 +98,59 @@ export function applyAppearance(settings, preview = null) {
   const theme = preview ? themeFromColors(preview) : resolveTheme(settings);
   applyTheme('sakura'); // сбрасываем переменные к полному набору
   for (const [key, value] of Object.entries(theme)) {
-    if (key !== 'scheme' && key !== 'deco') root.style.setProperty('--' + kebab(key), value);
+    if (typeof value === 'string' && !['scheme', 'deco', 'accent2', 'bg2', 'bgMode', 'card', 'pattern'].includes(key)) root.style.setProperty('--' + kebab(key), value);
   }
   root.style.colorScheme = theme.scheme;
 
   // Свой акцент поверх темы
+  let accent = theme.accent;
   if (!preview && settings.accent) {
+    accent = settings.accent;
     for (const [key, value] of Object.entries(accentVars(settings.accent, theme.bg))) root.style.setProperty('--' + kebab(key), value);
   }
+  const light = theme.scheme === 'light';
+  const bg = theme.bg;
+
+  // «Верстак»: слои фона, карточки, линии — всё выводится из цвета фона темы
+  const card = theme.card || (light ? '#FFFFFF' : mix(bg, '#FFFFFF', 0.055));
+  const tokens = {
+    bg0: light ? mix(bg, '#000000', 0.07) : mix(bg, '#000000', 0.42),
+    bg1: light ? mix(bg, '#000000', 0.035) : mix(bg, '#000000', 0.2),
+    card,
+    card2: light ? mix(bg, '#FFFFFF', 0.55) : mix(card, '#FFFFFF', 0.05),
+    line: light ? mix(bg, '#000000', 0.1) : mix(bg, '#FFFFFF', 0.09),
+    accentDeep: mix(accent, '#000000', 0.35),
+  };
+  for (const [k, v] of Object.entries(tokens)) root.style.setProperty('--' + kebab(k), v);
+
+  // Градиент акцента (кнопка «Играть», переключатели, полоски)
+  const accent2 = (!settings.accent || preview) && theme.accent2 ? theme.accent2 : '';
+  root.style.setProperty('--accent-fill', accent2 ? `linear-gradient(135deg, ${accent}, ${accent2})` : accent);
+
+  // Объём: 0 — плоско, 1 — обычно, 2 — «блоки»
+  const depth = Number(theme.depth ?? settings.depth ?? 1);
+  const hi = light ? 0.7 : [0, 0.06, 0.1][depth] ?? 0.06;
+  const lo = light ? [0, 0.12, 0.2][depth] ?? 0.12 : [0, 0.35, 0.55][depth] ?? 0.35;
+  const drop = [0, 2, 3][depth] ?? 2;
+  root.style.setProperty('--raise', depth ? `inset 0 1px 0 rgba(255,255,255,${hi}), 0 ${drop}px 0 rgba(0,0,0,${lo})` : `0 0 0 1px ${tokens.line}`);
+  root.style.setProperty('--raise-big', depth ? `inset 0 1px 0 rgba(255,255,255,${hi}), 0 ${drop}px 0 rgba(0,0,0,${lo}), 0 ${8 * depth}px ${18 * depth}px rgba(0,0,0,${light ? 0.08 : 0.28})` : `0 0 0 1px ${tokens.line}`);
+  root.style.setProperty('--sunk', depth ? `inset 0 1px 2px rgba(0,0,0,${light ? 0.12 : 0.45})` : `inset 0 0 0 1px ${tokens.line}`);
+  root.style.setProperty('--btn-edge', depth ? `inset 0 2px 0 rgba(255,255,255,.3), inset 0 -${drop + 1}px 0 ${tokens.accentDeep}, 0 ${drop}px 0 rgba(0,0,0,${lo})` : 'none');
+
+  // Свечение кнопки «Играть»: 0…100
+  const glow = Number(theme.glowLevel ?? settings.glow ?? 50) / 100;
+  root.style.setProperty('--play-glow', glow > 0 ? `0 10px ${Math.round(14 + glow * 24)}px ${rgba(accent, (0.12 + glow * 0.4).toFixed(2))}` : '0 0 0 transparent');
+
+  // Фон окна: градиент темы + узор
+  const mode = theme.bgMode || 'glow';
+  const bg2 = theme.bg2 || mix(bg, accent, 0.18);
+  let fill;
+  if (mode === 'vertical') fill = `linear-gradient(180deg, ${bg}, ${bg2})`;
+  else if (mode === 'diagonal') fill = `linear-gradient(135deg, ${bg}, ${bg2})`;
+  else if (mode === 'solid') fill = bg;
+  else fill = `radial-gradient(1200px 600px at 85% -10%, ${theme.g1}, transparent 60%), radial-gradient(900px 500px at -10% 110%, ${theme.g2}, transparent 60%), ${theme.bg2 ? `linear-gradient(160deg, ${bg}, ${theme.bg2})` : bg}`;
+  const pattern = patternCss(theme.pattern ?? settings.pattern, light);
+  root.style.setProperty('--app-fill', pattern ? `${pattern}, ${fill}` : fill);
 
   // Размер текста, скругления, плотность
   root.style.setProperty('--fs', String(settings.textScale || 1));
@@ -83,14 +158,14 @@ export function applyAppearance(settings, preview = null) {
   root.style.setProperty('--ds', String(settings.density === 'compact' ? 0.75 : settings.density === 'roomy' ? 1.2 : 1));
 
   // Фон-картинка
-  const bg = settings.background;
+  const bgImg = settings.background;
   const layer = document.getElementById('bgimg');
   if (layer) {
-    const url = bg?.path ? (inApp ? fileUrl(bg.path) : bg.path) : '';
+    const url = bgImg?.path ? (inApp ? fileUrl(bgImg.path) : bgImg.path) : '';
     document.body.classList.toggle('has-bg', !!url);
     layer.style.backgroundImage = url ? `url("${url}")` : '';
-    layer.style.setProperty('--bg-blur', (bg?.blur ?? 8) + 'px');
-    layer.style.setProperty('--bg-dim', String((bg?.dim ?? 65) / 100));
+    layer.style.setProperty('--bg-blur', (bgImg?.blur ?? 8) + 'px');
+    layer.style.setProperty('--bg-dim', String((bgImg?.dim ?? 65) / 100));
   }
   return theme;
 }

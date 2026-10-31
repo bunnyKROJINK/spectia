@@ -46,6 +46,9 @@
 - [x] Spectia Doctor и понятные логи
 - [x] Импорт Prism / MultiMC .zip и CurseForge .zip
 - [x] Ctrl + K, мини-режим, статус в Discord, график недели
+- [x] Дизайн «Верстак», свои темы с градиентами и узорами
+- [x] Большой музыкальный плеер, любимые треки, таймер сна, музыка в меню
+- [x] Лицо скина, достижения, Spectia Wrapped
 - [ ] CurseForge в каталоге (ждём ключ API)
 
 Что планируется дальше — в [ROADMAP.md](ROADMAP.md).
@@ -66,6 +69,7 @@ src/                 интерфейс
   js/skinview.js     плоский предпросмотр скина
   js/sound.js        колокольчик
   js/doctor.js       Spectia Doctor: разбор логов
+  js/achievements.js достижения и Spectia Wrapped
   i18n/ru.js, en.js  переводы
 src-tauri/           Rust-часть
   src/instances.rs   сборки

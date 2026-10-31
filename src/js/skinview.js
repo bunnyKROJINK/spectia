@@ -110,6 +110,16 @@ export function paintSkins(root = document) {
     ctx.imageSmoothingEnabled = false;
     draw(ctx, img, c.dataset.side, c.dataset.slim === '1', cape);
   });
+  // Лица: голова спереди + «шапка» (второй слой)
+  root.querySelectorAll('canvas.face-canvas').forEach(async (c) => {
+    const img = await load(c.dataset.skin);
+    if (!img) return;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, 8, 8);
+    ctx.drawImage(img, 8, 8, 8, 8, 0, 0, 8, 8);
+    ctx.drawImage(img, 40, 8, 8, 8, 0, 0, 8, 8);
+  });
   // Маленькие картинки плащей: лицевая часть 10×16 из развёртки плаща
   root.querySelectorAll('canvas.cape-canvas').forEach(async (c) => {
     const cape = await load(c.dataset.cape);
@@ -147,3 +157,9 @@ const DEFAULT_SKIN = (() => {
   box('#1A1D2E', [0, 30, 16, 2], [16, 62, 16, 2]);     // ботинки
   return c.toDataURL('image/png');
 })();
+
+/** Лицо скина (8×8, увеличенное без размытия) */
+export function faceCanvas(image, size = 36, label = '') {
+  const attr = (v) => String(v).replace(/"/g, '&quot;');
+  return `<canvas class="face face-canvas" width="8" height="8" style="width:${size}px;height:${size}px" data-skin="${attr(image)}" role="img" aria-label="${attr(label)}"></canvas>`;
+}

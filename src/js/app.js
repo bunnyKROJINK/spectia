@@ -12,27 +12,29 @@ import { t, setLang, LANGS, formatNumber } from './i18n.js';
 import { THEMES, THEME_ORDER, TINTS } from './themes.js';
 import { applyAppearance, applyZoom, resolveTheme, themeFromColors, lum as lumOf } from './appearance.js';
 import { chime } from './sound.js';
-import { skinCanvas, paintSkins } from './skinview.js';
-import { icon, heroArt } from './icons.js';
+import { skinCanvas, paintSkins, faceCanvas } from './skinview.js';
+import { icon, heroArt, tintIcon, pixelScene } from './icons.js';
 import { searchModrinth, CATEGORIES, projectDetails, trending } from './modrinth.js';
 import { diagnose, crashDescription, lineLevel } from './doctor.js';
+import { ACHIEVEMENTS, artSvg, facts, newlyUnlocked, wrappedYear, wrappedData } from './achievements.js';
 import { matchScore } from './search.js';
 
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.7.0';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
 const NAV = [
-  { id: 'home', view: 'home' },
-  { id: 'instances', view: 'instances' },
-  { id: 'resources', view: 'resources' },
-  { id: 'news', view: 'news' },
-  { id: 'music', view: 'music' },
-  { id: 'skins', view: 'skins' },
-  { id: 'settings', view: 'settings' },
+  { id: 'home', view: 'home', ic: 'box' },
+  { id: 'resources', view: 'resources', ic: 'search' },
+  { id: 'news', view: 'news', ic: 'news' },
+  { id: 'music', view: 'music', ic: 'music' },
+  { id: 'skins', view: 'skins', ic: 'skin' },
+  { id: 'settings', view: 'settings', ic: 'gear' },
 ];
+// Экраны, где рядом с полоской иконок виден список сборок
+const LIST_VIEWS = new Set(['home', 'instances', 'instance', 'create']);
 // Каким пунктом меню подсвечивать каждый экран
-const NAV_OF_VIEW = { home: 'home', instances: 'instances', create: 'instances', instance: 'instances', resources: 'resources', news: 'news', music: 'music', skins: 'skins', settings: 'settings', accounts: '' };
+const NAV_OF_VIEW = { home: 'home', instances: 'home', create: 'home', instance: 'home', resources: 'resources', news: 'news', music: 'music', skins: 'skins', settings: 'settings', accounts: '' };
 
 const state = {
   view: 'home',
@@ -69,6 +71,9 @@ const state = {
   mini: false,
   palette: null,           // { query, sel } — окно Ctrl+K
   week: null,              // сессии для графика на главной
+  faces: {},               // id аккаунта → картинка скина (для лица)
+  ach: null,               // показанная плашка достижения
+  wrapped: null,           // { slide } — открытые итоги года
   instFilter: 'all',       // all | fav | archive | folder:… | tag:…
   msReady: false,          // настроен ли вход через Microsoft в этой сборке лаунчера
   msBusy: false,
@@ -110,6 +115,28 @@ const loaderLabel = (id) => (id === 'vanilla' ? t('loader.none') : t('loader.' +
 const tint = (n) => TINTS[n] || TINTS[0];
 
 /** Путь к своей картинке-обложке сборки (если есть) */
+/** Лицо аккаунта: голова скина, а если скина нет — первая буква ника */
+function faceHtml(acc, size = 36) {
+  if (!acc) return `<span class="avatar" style="width:${size}px;height:${size}px">?</span>`;
+  const img = state.faces[acc.id];
+  if (img) return faceCanvas(img, size, acc.name);
+  return `<span class="avatar" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;${acc.kind === 'ely' ? 'background:#207E5C' : ''}">${esc(acc.name.charAt(0).toUpperCase())}</span>`;
+}
+
+async function loadFaces() {
+  for (const a of state.accounts) {
+    if (a.id in state.faces) continue;
+    state.faces[a.id] = '';
+    api.accountSkin(a.id).then((sk) => { if (sk?.image) { state.faces[a.id] = sk.image; renderChrome(); if (state.view === 'accounts') render(); } }).catch(() => {});
+  }
+}
+
+/** Значок сборки в списке: своя картинка или пиксельный пейзаж */
+function instIcon(inst) {
+  const url = coverUrl(inst);
+  return url ? `<img src="${esc(url)}" alt="">` : tintIcon(inst?.tint || 0);
+}
+
 function coverUrl(inst) {
   if (!inst?.coverImage || !state.dataDir) return '';
   const sep = state.dataDir.includes('\\') ? '\\' : '/';
@@ -235,35 +262,51 @@ function progressBar(id) {
 
 // ---------- Экраны ----------
 
+/** Сколько модов и миров в сборке — подгружаем один раз для главной */
+const homeInfo = {};
+function loadHomeInfo(inst) {
+  if (homeInfo[inst.id]) return homeInfo[inst.id];
+  homeInfo[inst.id] = { mods: null, worlds: null };
+  const done = () => { if (state.view === 'home' && selected()?.id === inst.id) render(); };
+  if (inst.loader === 'vanilla') homeInfo[inst.id].mods = 0;
+  else api.listMods(inst.id).then((l) => { homeInfo[inst.id].mods = l.filter((m) => m.enabled).length; done(); }).catch(() => {});
+  api.listWorlds(inst.id).then((l) => { homeInfo[inst.id].worlds = l.length; done(); }).catch(() => {});
+  if (state.history.id !== inst.id && !state.history.loading) loadHistory(inst.id);
+  return homeInfo[inst.id];
+}
+
+const HIST_TAG = { installed: ['+ УСТ', '#4ED39A'], added: ['+ ФАЙЛ', '#4ED39A'], appeared: ['+ ПАПКА', '#4ED39A'], updated: ['↑ ОБН', 'var(--accent-text)'], enabled: ['● ВКЛ', 'var(--accent-text)'], disabled: ['○ ВЫКЛ', 'var(--muted)'], removed: ['− УДАЛ', 'var(--warn-text)'], vanished: ['− ПАПКА', 'var(--warn-text)'] };
+
 function viewHome() {
   const cur = selected();
   if (!cur) {
     return `<div class="view">
-      <section class="hero" style="background:${TINTS[0]}">${heroArt}
-        <div class="hero-inner">
+      <section class="hero" style="min-height:300px">${pixelScene(0)}
+        <div class="hero-inner" style="min-height:300px">
           <div class="stack" style="gap:10px;max-width:520px">
-            <span class="eyebrow">Spectia</span>
+            <span class="eyebrow-mono" style="color:#fff">Spectia</span>
             <h1>${esc(t('home.emptyTitle'))}</h1>
             <p style="color:#D9DCF2;line-height:1.5">${esc(t('home.emptySub'))}</p>
           </div>
-          <button class="play" data-action="openCreate">${esc(t('home.newInstance'))}</button>
+          <div class="row"><button class="btn" data-action="openPrism">${icon.move()}<span>${esc(t('prism.button'))}</span></button>
+          <button class="play" data-action="openCreate">${esc(t('home.newInstance'))}</button></div>
         </div>
       </section>
       ${findBlock()}
     </div>`;
   }
+  const info = loadHomeInfo(cur);
+  const last = cur.lastPlayed ? ago(cur.lastPlayed) : '';
+  const stat = (label, value) => `<div class="panel stat"><span class="eyebrow-mono" style="font-size:calc(10px*var(--fs,1))">${esc(label)}</span><b>${esc(value)}</b></div>`;
+  const hist = state.history.id === cur.id && Array.isArray(state.history.list) ? state.history.list.slice(0, 5) : null;
+  const tabLink = (tab) => `<button data-action="openInstance" data-id="${esc(cur.id)}" data-tab="${tab}">${esc(t('is.tab.' + tab))}</button>`;
   return `<div class="view">
-    <section class="hero" aria-label="${esc(cur.name)}" style="${coverBg(cur, true)}">${coverUrl(cur) ? '' : heroArt}
-      <div class="hero-inner">
-        <div class="stack" style="gap:10px;min-width:0">
-          <span class="eyebrow">${esc(t('home.continue'))}</span>
+    ${wrappedBanner()}
+    <section class="hero" aria-label="${esc(cur.name)}" style="${coverUrl(cur) ? coverBg(cur) : ''}">${coverUrl(cur) ? '' : pixelScene(cur.tint || 0)}
+      <div class="hero-inner" style="min-height:250px">
+        <div class="stack" style="gap:8px;min-width:0">
+          ${last ? `<span class="chip" style="align-self:flex-start">${esc(t('home.lastPlayed', { when: last }))}</span>` : ''}
           <h1 class="ellipsis">${esc(cur.name)}</h1>
-          <div class="row" style="gap:8px">
-            <span class="chip">Minecraft ${esc(cur.gameVersion)}</span>
-            <span class="chip">${esc(loaderLabel(cur.loader))}</span>
-            <span class="chip">${esc(t('home.ram', { gb: cur.memoryGb }))}</span>
-            ${cur.playTimeSecs ? `<span class="chip">${esc(t('home.played', { t: formatPlayTime(cur.playTimeSecs) }))}</span>` : ''}
-          </div>
         </div>
         <div class="row">
           <button class="icon-btn" data-action="openFolder" data-id="${esc(cur.id)}" aria-label="${esc(t('is.openFolder'))}" title="${esc(t('is.openFolder'))}">${icon.folder(20)}</button>
@@ -274,25 +317,48 @@ function viewHome() {
       ${progressBar(cur.id)}
     </section>
 
-    <section class="panel pad-s stack" style="gap:12px" aria-label="${esc(t('home.myInstances'))}">
-      <div class="row between">
-        <h2 class="h2-lg">${esc(t('home.myInstances'))}</h2>
-        <div class="row" style="gap:8px">
-          <button class="btn sm" data-action="nav" data-view="instances">${esc(t('home.allInstances'))}</button>
-          <button class="btn sm soft" data-action="openCreate">${esc(t('home.newInstance'))}</button>
-        </div>
-      </div>
-      <div class="grid grid-cards">
-        ${visibleInstances().slice(0, 8).map((i) => `
-          <button class="card" data-action="select" data-id="${esc(i.id)}" data-ctx="${esc(i.id)}" ${pressed(i.id === cur.id)}>
-            <span class="cover" style="${coverBg(i)}"></span>${i.favorite ? `<span class="fav" aria-label="${esc(t('org.favorite'))}">${icon.star(16).replace('fill="none"', 'fill="currentColor"')}</span>` : ''}
-            <span class="card-title ellipsis" style="max-width:100%">${esc(i.name)}</span>
-            <span class="small muted">${esc(i.gameVersion)} · ${esc(loaderLabel(i.loader))}</span>
-          </button>`).join('')}
-      </div>
-    </section>
+    <div class="stats">
+      ${stat(t('stat.version'), cur.gameVersion)}
+      ${stat(t('stat.loader'), loaderLabel(cur.loader) + (cur.loaderVersion ? ' ' + cur.loaderVersion.replace(cur.gameVersion + '-', '').split('-')[0] : ''))}
+      ${stat(t('stat.mods'), info.mods ?? '—')}
+      ${stat(t('stat.worlds'), info.worlds ?? '—')}
+      ${stat(t('stat.played'), formatPlayTime(cur.playTimeSecs))}
+    </div>
+
+    <div class="tabs" role="group" aria-label="${esc(t('is.title'))}">
+      <button aria-selected="true">${esc(t('home.overview'))}</button>
+      ${cur.loader !== 'vanilla' ? tabLink('mods') : ''}${tabLink('worlds')}${tabLink('screens')}${tabLink('logs')}${tabLink('launch')}
+    </div>
+
+    <div class="row" style="align-items:stretch;gap:16px">
+      <section class="panel pad stack" style="flex:3 1 360px;min-width:0;gap:0" aria-label="${esc(t('home.recent'))}">
+        <span class="eyebrow-mono" style="padding-bottom:8px">${esc(t('home.recent'))}</span>
+        ${hist === null ? `<div class="row" style="padding:10px 0"><span class="spinner"></span></div>`
+          : hist.length ? hist.map((ev) => {
+            const [tag, color] = HIST_TAG[ev.action] || ['•', 'var(--muted)'];
+            return `<div style="display:grid;grid-template-columns:84px minmax(0,1fr) auto;gap:12px;padding:10px 0;border-top:1px solid var(--line);align-items:center">
+              <span class="hist-tag" style="color:${color}">${esc(tag)}</span><span class="ellipsis">${esc(ev.name)}${ev.action === 'updated' && ev.detail ? ` <span class="muted small">${esc(ev.detail)}</span>` : ''}</span><span class="small muted">${esc(ago(ev.time))}</span></div>`;
+          }).join('')
+          : `<p class="note" style="padding:10px 0;border-top:1px solid var(--line)">${esc(t('home.noRecent'))}</p>`}
+      </section>
+      <aside class="stack" style="flex:2 1 240px;min-width:0;gap:16px">
+        ${doctorMini(cur)}
+        ${cur.notes ? `<div class="panel pad stack" style="gap:6px"><span class="eyebrow-mono">${esc(t('org.notes'))}</span><span class="note" style="color:var(--text);white-space:pre-line">${esc(cur.notes)}</span></div>` : ''}
+      </aside>
+    </div>
     ${weekBlock()}
-    ${findBlock()}
+  </div>`;
+}
+
+/** Короткий статус от Spectia Doctor для главной */
+function doctorMini(cur) {
+  if (cur.loader !== 'vanilla' && state.deps.id !== cur.id) loadDeps(cur.id);
+  const deps = state.deps.id === cur.id ? state.deps.list : null;
+  const bad = deps && deps.length;
+  return `<div class="panel pad ${bad ? 'warn-card' : 'ok-card'}" style="display:flex;gap:12px">
+    <span style="color:${bad ? 'var(--warn-text)' : '#4ED39A'};flex-shrink:0">${bad ? icon.warn(18) : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>'}</span>
+    <span class="stack" style="gap:4px"><b>Spectia Doctor</b><span class="note">${esc(bad ? t('home.docDeps', { n: deps.length }) : t('home.docOk'))}</span>
+    ${bad ? `<button class="btn sm" style="align-self:flex-start;margin-top:4px" data-action="openInstance" data-id="${esc(cur.id)}" data-tab="mods">${esc(t('news.openMods'))}</button>` : ''}</span>
   </div>`;
 }
 
@@ -567,7 +633,7 @@ function viewInstance() {
   return `<div class="view">
     <div class="row" style="gap:14px">
       <button class="icon-btn" data-action="goBack" aria-label="${esc(t('common.back'))}">${icon.back()}</button>
-      <span class="thumb" style="width:44px;height:44px;${coverBg(e)}"></span>
+      <span class="il-icon">${instIcon(e)}</span>
       <div class="stack grow" style="gap:2px;min-width:0">
         <span class="small muted">${esc(t('is.title'))}</span>
         <h1 class="ellipsis" style="font-size:calc(24px*var(--fs,1));font-weight:700">${esc(e.name || '…')}</h1>
@@ -677,7 +743,7 @@ function depsBanner(e) {
   const d = state.deps;
   if (d.id !== e.id) { loadDeps(e.id); return ''; }
   if (!d.list || !d.list.length) return '';
-  return `<section class="panel pad stack" style="gap:8px;border-color:var(--warn-text)">
+  return `<section class="panel pad stack warn-card" style="gap:8px">
     <div class="row" style="gap:10px;flex-wrap:nowrap"><span class="warn">${icon.warn()}</span><h2 class="h2">${esc(t('deps.title'))}</h2></div>
     ${d.list.map((p) => `<div class="row between" style="gap:10px">
       <span class="note" style="flex:1 1 300px">${esc(t(p.kind === 'missing' ? 'deps.missing' : 'deps.conflict', { name: p.title, who: p.neededBy.join(', ') }))}</span>
@@ -870,13 +936,13 @@ async function loadHistory(id) {
   state.history = { id, list: null, loading: true };
   try { state.history.list = await api.modHistory(id); } catch { state.history.list = []; }
   state.history.loading = false;
-  if (state.view === 'instance') render();
+  if (state.view === 'instance' || state.view === 'home') render();
 }
 
 async function loadDeps(id) {
   state.deps = { id, list: null };
   try { state.deps.list = await api.checkDependencies(id); } catch { state.deps.list = []; }
-  if (state.view === 'instance' && state.instTab === 'mods' && state.deps.list.length) render();
+  if ((state.view === 'instance' && state.instTab === 'mods' && state.deps.list.length) || state.view === 'home') render();
 }
 
 function instWorlds(e) {
@@ -1269,7 +1335,7 @@ function viewAccounts() {
   const list = state.accounts.length
     ? `<section class="panel list">${state.accounts.map((a) => `
         <div class="list-row">
-          <span class="avatar" style="${a.kind === 'ely' ? 'background:#207E5C' : ''}">${esc(a.name.charAt(0).toUpperCase())}</span>
+          ${faceHtml(a, 40)}
           <div class="stack grow" style="gap:2px">
             <span class="card-title">${esc(a.name)}</span>
             <span class="small muted">${esc(t('acc.kind.' + a.kind))}</span>
@@ -1284,6 +1350,7 @@ function viewAccounts() {
   return `<div class="view">
     <h1 class="page-title">${esc(t('acc.title'))}</h1>
     ${list}
+    ${achievementsHtml()}
     <h2 class="h2" style="margin:8px 0 0 4px">${esc(t('acc.add'))}</h2>
     <div class="grid grid-2">
       <section class="panel pad stack">
@@ -1321,9 +1388,9 @@ function rangeRow({ id, key, label, min, max, step, value, unit = '', scale = 1,
 
 function setLook(s) {
   const card = (id, T, name, extra = '') => `<button class="card theme-card" data-action="setTheme" data-theme="${esc(id)}" ${pressed(id === s.theme)} ${extra}>
-      <span class="theme-preview" style="border:1px solid ${T.border};background:radial-gradient(120px 60px at 90% 0%,${T.g1},transparent 70%),${T.bg}">
+      <span class="theme-preview" style="border:1px solid ${T.border};background:radial-gradient(120px 60px at 90% 0%,${T.g1},transparent 70%),${T.bg2 ? `linear-gradient(160deg,${T.bg},${T.bg2})` : T.bg}">
         <span class="side" style="background:${T.surface};border-right:1px solid ${T.border}"></span>
-        <span class="main"><span class="hero-mini" style="background:${T.surface2}"></span><span class="btn-mini" style="background:${T.accent}"></span></span>
+        <span class="main"><span class="hero-mini" style="background:${T.surface2}"></span><span class="btn-mini" style="background:${T.accent2 ? `linear-gradient(90deg,${T.accent},${T.accent2})` : T.accent}"></span></span>
       </span>
       <span style="font-weight:600" class="ellipsis">${esc(name)}</span>
     </button>`;
@@ -1391,6 +1458,22 @@ function setLook(s) {
           </div>
         </div>
       </div>
+      <div class="grid grid-2">
+        <div class="stack" style="gap:8px">
+          <span class="label">${esc(t('te.depth'))}</span>
+          <div class="seg" role="group" aria-label="${esc(t('te.depth'))}" style="align-self:flex-start">
+            ${[0, 1, 2].map((v) => `<button data-action="setDepth" data-v="${v}" ${pressed(Number(s.depth ?? 1) === v)}>${esc(t('te.depth.' + v))}</button>`).join('')}
+          </div>
+        </div>
+        <div class="stack" style="gap:8px">
+          <span class="label">${esc(t('te.pattern'))}</span>
+          <div class="seg" role="group" aria-label="${esc(t('te.pattern'))}" style="align-self:flex-start;flex-wrap:wrap">
+            ${[['', 'none'], ['dots', 'dots'], ['grid', 'grid'], ['pixels', 'pixels'], ['stars', 'stars']].map(([v, k]) => `<button data-action="setPattern" data-v="${v}" ${pressed((s.pattern || '') === v)}>${esc(t('te.pat.' + k))}</button>`).join('')}
+          </div>
+        </div>
+        ${rangeRow({ id: 'glowlvl', key: 'glow', label: t('te.glow'), min: 0, max: 100, step: 5, value: s.glow ?? 50, unit: '%' })}
+      </div>
+      <p class="note">${esc(t('look.ownThemeNote'))}</p>
       <div class="row"><button class="btn sm" data-action="resetLook">${esc(t('look.reset'))}</button></div>
       ${switchRow('toggleOn', 'jelly', s.jelly !== false, t('look.jelly'), t('look.jellySub'))}
       ${switchRow('toggleSetting', 'reduceMotion', s.reduceMotion, t('set.reduceMotion'), t('set.reduceMotionSub'))}
@@ -1590,32 +1673,96 @@ async function loadMusic() {
   if (state.view === 'music') render();
 }
 
+const fmtTime = (sec) => { sec = Math.max(0, Math.floor(sec || 0)); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`; };
+const favs = () => new Set(state.settings.musicFav || []);
+
 function viewMusic() {
   const mu = state.music;
   if (mu.list === null && !mu.loading) { mu.loading = true; loadMusic().finally(() => { mu.loading = false; }); }
   if (mu.list === null) return `<div class="view"><h1 class="page-title">${esc(t('music.title'))}</h1><div class="row" style="padding:20px"><span class="spinner"></span></div></div>`;
+  const fav = favs();
   const groups = MUSIC_GROUPS.filter((g) => mu.list.some((x) => x.group === g));
-  const list = mu.list.filter((x) => mu.group === 'all' || x.group === mu.group);
-  const empty = `<section class="panel empty">${icon.bell(32)}<h2 class="h2">${esc(t('music.empty'))}</h2><p class="note" style="max-width:480px">${esc(t('music.emptySub'))}</p></section>`;
+  const list = musicQueue();
+  const cur = mu.current;
+  const repeat = state.settings.musicRepeat || 'all';
+  const vol = state.settings.musicVolume ?? 70;
+  const sleep = mu.sleep;
+  const empty = `<section class="panel empty">${icon.music(32)}<h2 class="h2">${esc(t('music.empty'))}</h2><p class="note" style="max-width:480px">${esc(t('music.emptySub'))}</p></section>`;
+  if (!mu.list.length) return `<div class="view"><h1 class="page-title">${esc(t('music.title'))}</h1>${empty}</div>`;
+  const dur = audio.duration || 0;
+  const pos = audio.currentTime || 0;
+  const pct = dur ? (pos / dur) * 100 : 0;
   return `<div class="view">
+    <section class="panel bigplayer" aria-label="${esc(t('music.player'))}">
+      <span class="disc ${mu.playing ? 'spin' : ''}" aria-hidden="true"><svg viewBox="0 0 16 16" width="120" height="120" shape-rendering="crispEdges"><rect x="3" y="1" width="10" height="14" fill="#1C1C1C"/><rect x="1" y="3" width="14" height="10" fill="#1C1C1C"/><rect x="2" y="2" width="12" height="12" fill="#1C1C1C"/><rect x="4" y="4" width="8" height="8" fill="#262626"/><rect x="6" y="6" width="4" height="4" fill="var(--accent)"/><rect x="7" y="7" width="2" height="2" fill="#0A0A0A"/><rect x="3" y="3" width="2" height="1" fill="#3A3A3A"/></svg></span>
+      <div class="stack" style="flex:1 1 380px;min-width:0;gap:12px">
+        <div class="stack" style="gap:4px">
+          <span class="eyebrow-mono">${esc(cur ? t('music.now') + ' · ' + t('music.g.' + cur.group) : t('music.pick'))}</span>
+          <h1 style="margin:0;font-size:calc(30px*var(--fs,1));font-weight:700" class="ellipsis">${esc(cur ? cur.title : t('music.title'))}</h1>
+        </div>
+        <div class="row" style="gap:12px;flex-wrap:nowrap">
+          <span class="mono small muted" id="mu-pos">${fmtTime(pos)}</span>
+          <label for="mu-seek" class="sr">${esc(t('music.seek'))}</label>
+          <input id="mu-seek" type="range" class="range-line" min="0" max="1000" step="1" value="${Math.round(pct * 10)}" style="--p:${pct}%" ${cur ? '' : 'disabled'} data-seek>
+          <span class="mono small muted" id="mu-dur">${fmtTime(dur)}</span>
+        </div>
+        <div class="row" style="gap:10px">
+          <button class="icon-btn" data-action="toggleShuffle" ${pressed(mu.shuffle)} aria-label="${esc(t('music.shuffle'))}" title="${esc(t('music.shuffle'))}" style="${mu.shuffle ? 'color:var(--accent-text);box-shadow:var(--raise),0 0 0 1px var(--accent)' : ''}">${icon.shuffle()}</button>
+          <button class="icon-btn" data-action="musicPrev" aria-label="${esc(t('music.prev'))}">${icon.prev()}</button>
+          <button class="play" style="min-width:0;width:56px;height:56px;padding:0" data-action="${cur ? 'musicToggle' : 'playAll'}" aria-label="${esc(t(mu.playing ? 'music.pause' : 'music.play'))}">${mu.playing ? icon.pause(20) : icon.play(20)}</button>
+          <button class="icon-btn" data-action="musicNext" aria-label="${esc(t('music.next'))}">${icon.next()}</button>
+          <div class="seg" role="group" aria-label="${esc(t('music.repeat'))}">
+            ${['off', 'all', 'one'].map((r) => `<button data-action="setRepeat" data-v="${r}" ${pressed(repeat === r)}>${esc(t('music.repeat.' + r))}</button>`).join('')}
+          </div>
+          <span class="grow" style="flex:1 1 20px"></span>
+          <span class="row" style="gap:8px;flex-wrap:nowrap;color:var(--muted)">${icon.volume()}
+            <label for="mu-vol" class="sr">${esc(t('music.volume'))}</label>
+            <input id="mu-vol" type="range" class="range-line" style="width:110px;flex:none;--p:${vol}%" min="0" max="100" step="1" value="${vol}" data-bind="settings.musicVolume" data-number data-save-settings data-vol></span>
+        </div>
+        <div class="row" style="gap:8px">
+          <span class="small muted">${icon.moonSleep(14)} ${esc(t('music.sleep'))}:</span>
+          ${[0, 15, 30, 60, -1].map((m) => `<button class="pill sm" data-action="setSleep" data-m="${m}" ${pressed((sleep?.mode ?? 0) === m)}>${esc(m === 0 ? t('music.sleepOff') : m === -1 ? t('music.sleepTrack') : t('music.sleepMin', { n: m }))}</button>`).join('')}
+          ${sleep && sleep.until ? `<span class="small muted" id="mu-sleep">${esc(t('music.sleepLeft', { t: fmtTime((sleep.until - Date.now()) / 1000) }))}</span>` : ''}
+        </div>
+      </div>
+    </section>
+
     <div class="row between">
-      <h1 class="page-title">${esc(t('music.title'))}</h1>
-      ${mu.list.length ? `<div class="row" style="gap:8px">
-        <button class="btn sm ${mu.shuffle ? 'soft' : ''}" data-action="toggleShuffle" ${pressed(mu.shuffle)}>${esc(t('music.shuffle'))}</button>
-        <button class="btn sm accent" data-action="playAll">${icon.play(14)}<span>${esc(t('music.playAll'))}</span></button>
-      </div>` : ''}
-    </div>
-    <p class="note" style="margin-left:4px">${esc(t('music.note'))}</p>
-    ${mu.list.length ? `<div class="row" style="gap:6px" role="group" aria-label="${esc(t('music.groups'))}">
+      <div class="row" style="gap:6px" role="group" aria-label="${esc(t('music.groups'))}">
         <button class="pill" data-action="setMusicGroup" data-g="all" ${pressed(mu.group === 'all')}>${esc(t('music.all'))}</button>
+        <button class="pill" data-action="setMusicGroup" data-g="fav" ${pressed(mu.group === 'fav')}>${icon.heart(14)} ${esc(t('music.fav'))}${fav.size ? ' · ' + fav.size : ''}</button>
         ${groups.map((g) => `<button class="pill" data-action="setMusicGroup" data-g="${g}" ${pressed(mu.group === g)}>${esc(t('music.g.' + g))}</button>`).join('')}
       </div>
-      <section class="panel list">${list.map((x) => `<button class="list-row track ${mu.current?.key === x.key ? 'on' : ''}" data-action="playTrack" data-key="${esc(x.key)}">
-          <span class="thumb mod-icon" style="width:38px;height:38px" aria-hidden="true">${mu.current?.key === x.key && mu.playing ? '<span class="eq"><i></i><i></i><i></i></span>' : icon.play(14)}</span>
-          <span class="grow card-title" style="font-size:calc(14px*var(--fs,1));text-align:left">${esc(x.title)}</span>
-          <span class="small muted">${esc(t('music.g.' + x.group))}</span>
-        </button>`).join('')}</section>` : empty}
+      <button class="switch-row" style="width:auto;gap:10px" role="switch" aria-checked="${!!state.settings.menuMusic}" data-action="toggleMenuMusic" title="${esc(t('music.menuSub'))}"><span class="small">${esc(t('music.menu'))}</span><span class="switch"></span></button>
+    </div>
+    ${mu.group === 'fav' && !list.length ? `<p class="note" style="margin-left:4px">${esc(t('music.favEmpty'))}</p>` : ''}
+    <section class="panel list">${list.map((x, n) => {
+      const on = cur?.key === x.key;
+      return `<div class="list-row track-row ${on ? 'on' : ''}">
+        <button class="track" data-action="playTrack" data-key="${esc(x.key)}" style="display:flex;align-items:center;gap:14px;flex:1;min-width:0;padding:0">
+          <span class="thumb mod-icon mono" style="width:36px;height:36px;font-size:calc(12px*var(--fs,1));${on ? 'background:var(--accent-fill);color:var(--accent-ink)' : ''}" aria-hidden="true">${on && mu.playing ? '<span class="eq"><i></i><i></i><i></i></span>' : String(n + 1).padStart(2, '0')}</span>
+          <span class="grow card-title ellipsis" style="font-size:calc(14px*var(--fs,1));text-align:left">${esc(x.title)}</span>
+          <span class="small muted" style="width:120px;text-align:left">${esc(t('music.g.' + x.group))}</span>
+        </button>
+        <button class="heart" data-action="toggleFav" data-key="${esc(x.key)}" ${pressed(fav.has(x.key))} aria-label="${esc(t(fav.has(x.key) ? 'music.unfav' : 'music.favAdd', { name: x.title }))}">${icon.heart()}</button>
+      </div>`;
+    }).join('')}</section>
   </div>`;
+}
+
+/** Обновляет только ползунок и время, не перерисовывая весь экран */
+function refreshSeek() {
+  if (state.view !== 'music') return;
+  const seek = $('#mu-seek');
+  if (!seek || seek.matches(':active')) return;
+  const dur = audio.duration || 0;
+  const pct = dur ? (audio.currentTime / dur) * 100 : 0;
+  seek.value = String(Math.round(pct * 10));
+  seek.style.setProperty('--p', pct + '%');
+  const p = $('#mu-pos'); if (p) p.textContent = fmtTime(audio.currentTime);
+  const d = $('#mu-dur'); if (d) d.textContent = fmtTime(dur);
+  const sl = $('#mu-sleep');
+  if (sl && state.music.sleep?.until) sl.textContent = t('music.sleepLeft', { t: fmtTime((state.music.sleep.until - Date.now()) / 1000) });
 }
 
 /** Маленький плеер внизу меню: виден на любом экране, пока играет музыка */
@@ -1637,37 +1784,60 @@ const VIEWS = { home: viewHome, instances: viewInstances, create: viewCreate, in
 // ---------- Отрисовка ----------
 
 function renderChrome() {
-  $('#titlebar').innerHTML = `
-    <div class="brand" data-tauri-drag-region>${icon.moon()}<span data-tauri-drag-region>Spectia</span></div>
-    <div class="winbtns">
-      <button class="winbtn" data-action="openPalette" aria-label="${esc(t('pal.open'))}" title="${esc(t('pal.open'))} (Ctrl+K)">${icon.search(14)}</button>
+  const titleRight = `<div class="winbtns">
       <button class="winbtn" data-action="toggleMini" aria-label="${esc(t(state.mini ? 'mini.exit' : 'mini.enter'))}" title="${esc(t(state.mini ? 'mini.exit' : 'mini.enter'))}">${state.mini ? icon.maximize() : '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="5.5" y="5.5" width="5" height="5" rx="1" fill="none" stroke="currentColor"/><path d="M1.5 6V2.5a1 1 0 0 1 1-1H9" fill="none" stroke="currentColor"/></svg>'}</button>
       <button class="winbtn" data-action="winMin" aria-label="${esc(t('win.minimize'))}">${icon.minimize()}</button>
       <button class="winbtn" data-action="winMax" aria-label="${esc(t('win.maximize'))}">${icon.maximize()}</button>
       <button class="winbtn close" data-action="winClose" aria-label="${esc(t('win.close'))}">${icon.close()}</button>
     </div>`;
+  const showList = LIST_VIEWS.has(state.view);
+  $('#titlebar').innerHTML = `
+    <button class="searchbox" data-action="openPalette" aria-label="${esc(t('pal.open'))}">${icon.search(14)}<span>${esc(t('pal.search'))}</span><kbd>Ctrl K</kbd></button>
+    <div class="grow" data-tauri-drag-region style="align-self:stretch"></div>
+    ${!showList && state.music.current ? `<div class="title-player">${playerHtml()}</div>` : ''}
+    ${titleRight}`;
 
   const active = NAV_OF_VIEW[state.view];
-  $('#sidebar').setAttribute('aria-label', t('nav.label'));
-  $('#sidebar').innerHTML = `
-    <div class="nav">
-      ${NAV.map((n) => `<button class="nav-item" data-action="nav" data-view="${n.view}" aria-current="${n.id === active ? 'page' : 'false'}"><span class="bar"></span><span>${esc(t('nav.' + n.id))}</span></button>`).join('')}
+  const btn = (n) => `<button class="rail-btn" data-action="nav" data-view="${n.view}" data-tip="${esc(t('nav.' + n.id))}" aria-label="${esc(t('nav.' + n.id))}" aria-current="${n.id === active ? 'page' : 'false'}">${icon[n.ic](20)}</button>`;
+  const acc = activeAccount();
+  $('#rail').setAttribute('aria-label', t('nav.label'));
+  $('#rail').innerHTML = `
+    <div class="rail-group">
+      <span class="rail-logo" aria-hidden="true">${icon.moon(22)}</span>
+      ${NAV.filter((n) => n.id !== 'settings').map(btn).join('')}
     </div>
-    <div class="stack" style="gap:8px">
-      ${playerHtml()}
-      <span class="small muted" style="padding:0 4px">${esc(t('nav.account'))}</span>
-      <button class="account" data-action="nav" data-view="accounts" aria-label="${esc(t('nav.manageAccounts'))}">
-        ${(() => {
-          const a = activeAccount();
-          return a
-            ? `<span class="avatar" style="${a.kind === 'ely' ? 'background:#207E5C' : ''}">${esc(a.name.charAt(0).toUpperCase())}</span>
-               <span class="stack grow" style="gap:2px;min-width:0"><span class="ellipsis" style="font-weight:600">${esc(a.name)}</span><span class="small muted">${esc(t('acc.kind.' + a.kind))}</span></span>`
-            : `<span class="avatar">?</span>
-               <span class="stack grow" style="gap:2px"><span style="font-weight:600">${esc(t('acc.notSigned'))}</span><span class="small muted">Microsoft · Ely.by</span></span>`;
-        })()}
-        ${icon.chevronRight()}
-      </button>
+    <div class="rail-group">
+      ${btn(NAV.find((n) => n.id === 'settings'))}
+      <button class="rail-face" data-action="nav" data-view="accounts" aria-label="${esc(acc ? t('nav.profile', { name: acc.name }) : t('acc.notSigned'))}" title="${esc(acc ? acc.name : t('acc.notSigned'))}">${faceHtml(acc, 36)}</button>
     </div>`;
+
+  const side = $('#sidebar');
+  side.hidden = !showList;
+  if (showList) {
+    const list = visibleInstances();
+    const cur = selected();
+    side.setAttribute('aria-label', t('inst.title'));
+    side.innerHTML = `
+      <div class="il-head">
+        <span class="eyebrow-mono">${esc(t('inst.title'))} · ${state.instances.length}</span>
+        <span class="row" style="gap:6px;flex-wrap:nowrap">
+          <button class="icon-btn" style="width:32px;height:32px" data-action="nav" data-view="instances" aria-label="${esc(t('home.allInstances'))}" title="${esc(t('home.allInstances'))}">${icon.box(16)}</button>
+          <button class="icon-btn" style="width:32px;height:32px" data-action="openCreate" aria-label="${esc(t('home.newInstance'))}" title="${esc(t('home.newInstance'))}">+</button>
+        </span>
+      </div>
+      <div class="il-list">
+        ${list.map((i) => `<button class="il-item" data-action="pickInstance" data-id="${esc(i.id)}" data-ctx="${esc(i.id)}" ${pressed(cur && i.id === cur.id && state.view === 'home')}>
+          <span class="il-icon">${instIcon(i)}</span>
+          <span class="stack grow" style="gap:3px;min-width:0"><span class="ellipsis" style="font-weight:600">${esc(i.name)}</span><span class="mono small muted">${esc(i.loader === 'vanilla' ? 'vanilla' : i.loader)} ${esc(i.gameVersion)}</span></span>
+          ${state.running.has(i.id) ? '<span class="il-running" aria-label="' + esc(t('launch.running')) + '"></span>' : i.favorite ? `<span style="color:#FFD166">${icon.star(14).replace('fill="none"', 'fill="currentColor"')}</span>` : ''}
+        </button>`).join('') || `<p class="note" style="padding:8px">${esc(t('inst.empty'))}</p>`}
+      </div>
+      <div class="il-foot">${playerHtml()}</div>`;
+  } else {
+    side.innerHTML = '';
+  }
+  paintSkins(document.getElementById('rail'));
+  paintSkins(side);
 }
 
 function elyDialog() {
@@ -2113,6 +2283,8 @@ function renderOverlay() {
       </div></div></div>`;
   }
   if (state.palette) html += paletteHtml();
+  if (state.wrapped) html += wrappedHtml();
+  if (state.ach) html += achToastHtml();
   if (d?.type === 'renameSkin') {
     html += `<div class="overlay" data-action="closeDialog"><form class="dialog" style="max-width:440px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop data-submit="renameSkinSubmit">
       <h2 id="dlg-title">${esc(t('rename.title'))}</h2>
@@ -2124,14 +2296,28 @@ function renderOverlay() {
       </div></form></div>`;
   }
   if (d?.type === 'themeEditor') {
-    const color = (key, label) => `<label class="color-row"><input type="color" value="${esc(d[key])}" data-bind="dialog.${key}" data-live-theme><span class="stack" style="gap:2px"><span>${esc(label)}</span><span class="small muted mono">${esc(d[key])}</span></span></label>`;
-    html += `<div class="overlay side" data-action="closeDialog"><form class="dialog" style="max-width:380px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop data-submit="saveTheme">
+    const color = (key, label, optional = false) => `<label class="color-row"><input type="color" value="${esc(d[key] || (key === 'card' ? '#1A2440' : d.accent))}" data-bind="dialog.${key}" data-live-theme>
+      <span class="stack" style="gap:2px"><span>${esc(label)}</span><span class="small muted mono">${esc(d[key] || (optional ? t('te.auto') : ''))}</span></span></label>`;
+    const seg = (key, opts) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button type="button" data-action="teSet" data-k="${key}" data-v="${v}" ${pressed(String(d[key] ?? '') === String(v))}>${esc(l)}</button>`).join('')}</div>`;
+    html += `<div class="overlay side" data-action="closeDialog"><form class="dialog" style="max-width:420px;max-height:calc(100vh - 80px);overflow:auto" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop data-submit="saveTheme">
       <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t(d.id ? 'te.editTitle' : 'te.createTitle'))}</h2><p class="note">${esc(t('te.sub'))}</p></div>
       <div class="field"><label for="te-name" class="label">${esc(t('te.name'))}</label>
         <input id="te-name" class="input" maxlength="30" value="${esc(d.name)}" data-bind="dialog.name" placeholder="${esc(t('te.namePlaceholder'))}"></div>
+      <span class="eyebrow-mono">${esc(t('te.secBg'))}</span>
       ${color('bg', t('te.bg'))}
+      <div class="stack" style="gap:6px"><span class="small muted">${esc(t('te.bgMode'))}</span>${seg('bgMode', [['solid', t('te.mode.solid')], ['vertical', t('te.mode.vertical')], ['diagonal', t('te.mode.diagonal')], ['glow', t('te.mode.glow')]])}</div>
+      ${d.bgMode && d.bgMode !== 'solid' ? color('bg2', t('te.bg2'), true) : ''}
+      <div class="stack" style="gap:6px"><span class="small muted">${esc(t('te.pattern'))}</span>${seg('pattern', [['', t('te.pat.none')], ['dots', t('te.pat.dots')], ['grid', t('te.pat.grid')], ['pixels', t('te.pat.pixels')], ['stars', t('te.pat.stars')]])}</div>
+      <span class="eyebrow-mono">${esc(t('te.secAccent'))}</span>
       ${color('accent', t('te.accent'))}
+      <button type="button" class="switch-row" role="switch" aria-checked="${!!d.accent2}" data-action="teToggleGrad"><span>${esc(t('te.accentGrad'))}</span><span class="switch"></span></button>
+      ${d.accent2 ? color('accent2', t('te.accent2')) : ''}
+      <div class="range-row"><label for="te-glow" class="label">${esc(t('te.glow'))}</label><output id="te-glow-out">${d.glow ?? 50}%</output>
+        <input id="te-glow" type="range" min="0" max="100" step="5" value="${d.glow ?? 50}" style="grid-column:1 / -1" data-bind="dialog.glow" data-number data-unit="%" data-live-theme></div>
+      <span class="eyebrow-mono">${esc(t('te.secSurface'))}</span>
       ${color('text', t('te.text'))}
+      ${color('card', t('te.card'), true)}
+      <div class="stack" style="gap:6px"><span class="small muted">${esc(t('te.depth'))}</span>${seg('depth', [[0, t('te.depth.0')], [1, t('te.depth.1')], [2, t('te.depth.2')]])}</div>
       ${d.lowContrast ? `<p class="warn small" role="alert">${esc(t('te.lowContrast'))}</p>` : ''}
       <div class="row between">
         <div class="row" style="gap:6px">
@@ -2143,18 +2329,6 @@ function renderOverlay() {
           <button type="submit" class="btn accent">${esc(t('common.save'))}</button>
         </div>
       </div></form></div>`;
-  }
-  if (d?.type === 'deleteWorld') {
-    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
-      <div class="row" style="align-items:flex-start;gap:14px;flex-wrap:nowrap">
-        <span class="avatar" style="background:var(--warn-soft);color:var(--warn-text)">${icon.warn()}</span>
-        <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('worlds.deleteTitle', { name: d.folder }))}</h2><p class="note">${esc(t('worlds.deleteText'))}</p></div>
-      </div>
-      <div class="row" style="justify-content:flex-end">
-        <button class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
-        <button class="btn" data-action="copyWorld" data-folder="${esc(d.folder)}">${esc(t('worlds.copy'))}</button>
-        <button class="btn accent" data-action="deleteWorld" data-folder="${esc(d.folder)}">${esc(t('common.delete'))}</button>
-      </div></div></div>`;
   }
   if (state.importing) {
     html += `<div class="toast" role="status"><div class="stack" style="gap:8px;min-width:260px"><span>${esc(t('inst.importing', state.importing))}</span>
@@ -2310,6 +2484,9 @@ function subscribe() {
       celebrate('ready', t('notify.readyTitle'), t('notify.readyBody', { name: inst?.name || 'Minecraft' }));
     } else {
       state.running.delete(g.instanceId);
+      state.week = null;
+      delete homeInfo[g.instanceId];
+      setTimeout(checkAchievements, 1500);
       const byUser = stopping.delete(g.instanceId);
       if (!byUser && g.exitCode && g.exitCode !== 0) state.dialog = { type: 'crash', id: g.instanceId, log: g.log };
     }
@@ -2382,7 +2559,38 @@ async function doSaveInstance() {
 const audio = new Audio();
 audio.addEventListener('play', () => { state.music.playing = true; refreshPlayer(); });
 audio.addEventListener('pause', () => { state.music.playing = false; refreshPlayer(); });
-audio.addEventListener('ended', () => nextTrack());
+audio.addEventListener('ended', () => {
+  if (state.music.sleep?.mode === -1) { state.music.sleep = null; state.music.playing = false; refreshPlayer(); return; }
+  const r = state.settings.musicRepeat || 'all';
+  if (r === 'one') { audio.currentTime = 0; audio.play().catch(() => {}); return; }
+  const list = musicQueue();
+  const last = list.findIndex((x) => x.key === state.music.current?.key) === list.length - 1;
+  if (r === 'off' && last && !state.music.shuffle) { state.music.playing = false; refreshPlayer(); return; }
+  nextTrack();
+});
+audio.addEventListener('timeupdate', () => refreshSeek());
+audio.addEventListener('loadedmetadata', () => refreshSeek());
+
+// Таймер сна: в последние 8 секунд музыка плавно затихает
+setInterval(() => {
+  const sl = state.music.sleep;
+  if (!sl?.until) return;
+  const left = sl.until - Date.now();
+  const base = Math.min(1, (state.settings.musicVolume ?? 70) / 100);
+  if (left <= 0) {
+    audio.pause(); audio.volume = base; state.music.sleep = null; refreshPlayer();
+  } else if (left < 8000) {
+    audio.volume = base * (left / 8000);
+  }
+  refreshSeek();
+}, 1000);
+
+function prevTrack() {
+  if (audio.currentTime > 3) { audio.currentTime = 0; return; }
+  const list = musicQueue();
+  const at = list.findIndex((x) => x.key === state.music.current?.key);
+  playTrack(list[(at - 1 + list.length) % list.length]);
+}
 
 function refreshPlayer() {
   if (state.mini) return;
@@ -2392,7 +2600,8 @@ function refreshPlayer() {
 
 function musicQueue() {
   const mu = state.music;
-  return (mu.list || []).filter((x) => mu.group === 'all' || x.group === mu.group);
+  const fav = favs();
+  return (mu.list || []).filter((x) => mu.group === 'all' || (mu.group === 'fav' ? fav.has(x.key) : x.group === mu.group));
 }
 
 function playTrack(track) {
@@ -2411,6 +2620,126 @@ function nextTrack() {
   const at = list.findIndex((x) => x.key === state.music.current?.key);
   const next = state.music.shuffle ? list[Math.floor(Math.random() * list.length)] : list[(at + 1) % list.length];
   playTrack(next);
+}
+
+// ---------- Достижения ----------
+
+const achQueue = [];
+let achTimer = null;
+
+function bump(counter, n = 1) {
+  const c = (state.settings.counters ||= {});
+  c[counter] = (c[counter] || 0) + n;
+  saveSettings();
+  checkAchievements();
+}
+
+async function checkAchievements() {
+  if (!state.settings) return;
+  let sessions = Array.isArray(state.week) ? state.week : [];
+  if (!Array.isArray(state.week)) { try { sessions = await api.statsSessions(); state.week = sessions; } catch { sessions = []; } }
+  const unlocked = (state.settings.achievements ||= {});
+  const fresh = newlyUnlocked(facts({ sessions, instances: state.instances, settings: state.settings }), unlocked);
+  if (!fresh.length) return;
+  for (const id of fresh) { unlocked[id] = Math.floor(Date.now() / 1000); achQueue.push(id); }
+  saveSettings();
+  showNextAch();
+}
+
+function showNextAch() {
+  if (state.ach || !achQueue.length) return;
+  state.ach = achQueue.shift();
+  const s = state.settings;
+  if (s.sound !== false) chime('done', (s.soundVolume ?? 60) / 100);
+  if (s.notifications !== false && !document.hasFocus()) api.notify(t('ach.got'), t('ach.' + state.ach)).catch(() => {});
+  renderOverlay();
+  clearTimeout(achTimer);
+  achTimer = setTimeout(() => { state.ach = null; renderOverlay(); setTimeout(showNextAch, 400); }, 5000);
+}
+
+function achToastHtml() {
+  const a = ACHIEVEMENTS.find((x) => x.id === state.ach);
+  if (!a) return '';
+  return `<div class="ach-toast" role="status"><span class="ach-ico">${artSvg(a.art, 28)}</span>
+    <span class="stack" style="gap:2px"><span class="t1">${esc(t('ach.got'))}</span><b>${esc(t('ach.' + a.id))}</b></span></div>`;
+}
+
+function achievementsHtml() {
+  const got = state.settings.achievements || {};
+  const n = ACHIEVEMENTS.filter((a) => got[a.id]).length;
+  return `<section class="stack" style="gap:10px">
+    <div class="row between"><h2 class="h2" style="margin-left:4px">${esc(t('ach.title'))}</h2><span class="mono small muted">${n} / ${ACHIEVEMENTS.length}</span></div>
+    <div class="ach-grid">${ACHIEVEMENTS.map((a) => `<div class="panel ach ${got[a.id] ? '' : 'locked'}">
+      <span class="ach-ico">${artSvg(a.art, 28)}</span>
+      <span class="stack" style="gap:2px;min-width:0"><b>${esc(t('ach.' + a.id))}</b><span class="small muted">${esc(t('ach.' + a.id + '.how'))}</span>
+      ${got[a.id] ? `<span class="mono small" style="color:var(--accent-text)">${esc(new Date(got[a.id] * 1000).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long', year: 'numeric' }))}</span>` : ''}</span>
+    </div>`).join('')}</div>
+  </section>`;
+}
+
+// ---------- Spectia Wrapped ----------
+
+function wrappedBanner() {
+  const year = wrappedYear();
+  if (!year || !Array.isArray(state.week)) return '';
+  if (!wrappedData(state.week, year)) return '';
+  return `<section class="panel pad-s row between" style="gap:14px;background:var(--accent-fill);color:var(--accent-ink)">
+    <div class="stack" style="gap:2px"><span class="eyebrow-mono" style="color:inherit;opacity:.8">Spectia Wrapped</span><b style="font-size:calc(18px*var(--fs,1))">${esc(t('wr.banner', { year }))}</b></div>
+    <button class="btn" style="color:var(--text)" data-action="openWrapped">${esc(t('wr.open'))}</button>
+  </section>`;
+}
+
+function wrappedSlides(d) {
+  const months = Array.from({ length: 12 }, (_, m) => new Date(2026, m, 1).toLocaleDateString(document.documentElement.lang, { month: 'long' }));
+  const slides = [
+    { eyebrow: t('wr.s1'), big: String(d.year), text: t('wr.s1t') },
+    { eyebrow: t('wr.s2'), big: formatPlayTime(d.total), text: t('wr.s2t', { n: d.sessions, days: d.days }) },
+    { eyebrow: t('wr.s3'), big: d.topInstance[0], text: t('wr.s3t', { t: formatPlayTime(d.topInstance[1]), n: d.instances }) },
+    { eyebrow: t('wr.s4'), big: d.topVersion || '—', text: t('wr.s4t', { loader: loaderLabel(d.topLoader || 'vanilla') }) },
+    { eyebrow: t('wr.s5'), big: formatPlayTime(d.longest.seconds), text: t('wr.s5t', { name: d.longest.name, date: new Date(d.longest.start * 1000).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long' }) }) },
+    { eyebrow: t('wr.s6'), big: months[d.topMonth], text: d.night ? t('wr.s6n', { n: d.night }) : t('wr.s6t') },
+    { eyebrow: t('wr.s7'), big: `${Object.keys(state.settings.achievements || {}).length} / ${ACHIEVEMENTS.length}`, text: t('wr.s7t') },
+  ];
+  return slides;
+}
+
+function wrappedHtml() {
+  const w = state.wrapped;
+  const slides = wrappedSlides(w.data);
+  const sl = slides[w.slide];
+  return `<div class="wrapped" data-action="closeWrapped"><div class="wr-card" role="dialog" aria-modal="true" aria-label="Spectia Wrapped" data-stop>
+    <div class="row between"><span class="eyebrow-mono" style="color:#fff">Spectia Wrapped · ${w.data.year}</span>
+      <button class="icon-btn" style="width:34px;height:34px;background:rgba(0,0,0,.25);color:#fff" data-action="closeWrapped" aria-label="${esc(t('common.close'))}">${icon.close()}</button></div>
+    <div class="stack" style="gap:14px">
+      <span class="eyebrow-mono" style="color:rgba(255,255,255,.85)">${esc(sl.eyebrow)}</span>
+      <div class="wr-big">${esc(sl.big)}</div>
+      <p style="font-size:calc(17px*var(--fs,1));line-height:1.5;color:rgba(255,255,255,.92)">${esc(sl.text)}</p>
+    </div>
+    <div class="row between">
+      <span class="wr-dots">${slides.map((_, n) => `<i class="${n === w.slide ? 'on' : ''}"></i>`).join('')}</span>
+      <span class="row" style="gap:8px">
+        ${w.slide > 0 ? `<button class="btn" data-action="wrappedStep" data-d="-1">${esc(t('common.back'))}</button>` : ''}
+        ${w.slide < slides.length - 1 ? `<button class="btn" data-action="wrappedStep" data-d="1">${esc(t('wr.next'))}</button>` : `<button class="btn" data-action="closeWrapped">${esc(t('wr.done'))}</button>`}
+      </span>
+    </div>
+  </div></div>`;
+}
+
+/** Музыка в меню: «Любимое» вперемешку (или все треки, если любимых нет) */
+async function startMenuMusic() {
+  if (state.music.list === null) await loadMusic();
+  const fav = favs();
+  const pool = (state.music.list || []).filter((x) => !fav.size || fav.has(x.key));
+  if (!pool.length || !inApp) return;
+  state.music.shuffle = true;
+  state.music.group = fav.size ? 'fav' : 'all';
+  const track = pool[Math.floor(Math.random() * pool.length)];
+  state.music.current = track;
+  audio.src = fileUrl(track.path);
+  audio.volume = Math.min(1, (state.settings.musicVolume ?? 70) / 100);
+  // Если система не даёт играть звук без нажатия — начнём при первом клике
+  audio.play().catch(() => document.addEventListener('pointerdown', () => audio.play().catch(() => {}), { once: true }));
+  refreshPlayer();
 }
 
 // ---------- Баг-репорт ----------
@@ -2476,6 +2805,7 @@ const actions = {
       state.accounts = await api.addElyAccount(e.username, e.password, e.need2fa ? e.totp : null);
       state.dialog = null;
       state.ely = { username: '', password: '', totp: '', need2fa: false, busy: false, error: '' };
+      loadFaces();
       render();
       toast(t('acc.welcome', { name: activeAccount()?.name ?? '' }));
       return;
@@ -2625,6 +2955,7 @@ const actions = {
       const [first, ...rest] = res.installed;
       toast(t('res.installedToast', { list: first || d.title }) + (rest.length ? '. ' + t('res.alsoInstalled', { list: rest.join(', ') }) : ''));
       r.installed.add(d.pid);
+      bump('installs');
       if (state.mods.id === target.id) state.mods.list = null;
     } catch (e) {
       const code = String(e);
@@ -2649,6 +2980,7 @@ const actions = {
       const n = await api.applyModUpdates(state.edit.id, d.list.filter((_, i) => d.picked.has(i)));
       state.dialog = null;
       toast(t('mods.updDone', { n }));
+      if (n) bump('updates', n);
       state.mods.list = null;
     } catch (e) { d.busy = false; toast(t('error.generic', { message: e }), true); }
     render();
@@ -2785,6 +3117,33 @@ const actions = {
   setSource: (d) => { state.res.source = d.source; render(); if (d.source === 'modrinth' && !state.res.results) runSearch(); },
   search: () => runSearch(),
 
+  // ---------- 0.7 ----------
+  pickInstance: (d) => { state.selectedId = d.id; if (state.view !== 'home') go('home'); else render(); },
+  setRepeat: (d) => { state.settings.musicRepeat = d.v; saveSettings(); render(); },
+  setSleep: (d) => {
+    const m = Number(d.m);
+    state.music.sleep = m === 0 ? null : m === -1 ? { mode: -1 } : { mode: m, until: Date.now() + m * 60000 };
+    audio.volume = Math.min(1, (state.settings.musicVolume ?? 70) / 100);
+    render();
+  },
+  toggleFav: (d) => {
+    const f = favs();
+    if (f.has(d.key)) f.delete(d.key); else f.add(d.key);
+    state.settings.musicFav = [...f];
+    saveSettings(); render(); checkAchievements();
+  },
+  toggleMenuMusic: () => { state.settings.menuMusic = !state.settings.menuMusic; saveSettings(); render(); },
+  musicPrev: () => prevTrack(),
+  openWrapped: () => {
+    const year = wrappedYear();
+    const data = year && Array.isArray(state.week) ? wrappedData(state.week, year) : null;
+    if (!data) return;
+    state.wrapped = { slide: 0, data };
+    renderOverlay();
+  },
+  closeWrapped: () => { state.wrapped = null; renderOverlay(); },
+  wrappedStep: (d) => { state.wrapped.slide = Math.max(0, state.wrapped.slide + Number(d.d)); renderOverlay(); },
+
   // ---------- 0.6: аккаунт из Prism ----------
   openPrismAccounts: async () => {
     state.dialog = { type: 'prismAccounts', list: null };
@@ -2797,6 +3156,7 @@ const actions = {
       state.accounts = await api.addPrismAccount(d.id);
       state.dialog = null;
       state.skins.accountFor = null;
+      loadFaces();
       render();
       toast(t('acc.welcome', { name: activeAccount()?.name ?? '' }));
     } catch (e) { toast(String(e) === 'PRISM_GONE' ? t('launch.prismGone') : t('error.generic', { message: e }), true); }
@@ -2863,6 +3223,7 @@ const actions = {
     try {
       const res = await api.installProject(id, d.pid);
       toast(t('res.installedToast', { list: res.installed.join(', ') || d.title }));
+      bump('installs');
       state.deps.id = null; state.mods.list = null;
     } catch (e) { toast(t('error.generic', { message: e }), true); }
     delete state.res.installing[d.pid]; render();
@@ -2958,6 +3319,7 @@ const actions = {
       const res = await api.installProject(dlg.target, dlg.pid, d.world);
       state.dialog = null;
       toast(t('dp.installed', { name: res.installed[0] || dlg.title, world: d.world }));
+      bump('installs');
       if (state.dp.world === d.world) state.dp.list = null;
     } catch (e) {
       dlg.busy = null;
@@ -3056,6 +3418,7 @@ const actions = {
       state.instFilter = 'all';
       render();
       toast(t('prism.done', { n }));
+      if (n) bump('prism', n);
       celebrate('done', t('notify.doneTitle'), t('prism.done', { n }));
     } catch (e) {
       d.busy = false; renderOverlay();
@@ -3099,6 +3462,7 @@ const actions = {
     try {
       state.accounts = await api.addMicrosoftAccount();
       state.skins.accountFor = null;
+      loadFaces();
       toast(t('acc.welcome', { name: activeAccount()?.name ?? '' }));
     } catch (e) {
       const code = String(e).split(':')[0];
@@ -3186,7 +3550,7 @@ const actions = {
   setAccent: (d) => { state.settings.accent = d.color; applySettings(); render(); saveSettings(); },
   setDensity: (d) => { state.settings.density = d.d; applySettings(); render(); saveSettings(); },
   resetLook: () => {
-    Object.assign(state.settings, { uiScale: 1, textScale: 1, radiusScale: 1, density: 'normal' });
+    Object.assign(state.settings, { uiScale: 1, textScale: 1, radiusScale: 1, density: 'normal', depth: 1, pattern: '', glow: 50 });
     applySettings(); render(); saveSettings();
   },
   pickBackground: async () => {
@@ -3201,7 +3565,8 @@ const actions = {
   clearBackground: () => { state.settings.background = null; applySettings(); render(); saveSettings(); },
   newTheme: () => {
     const cur = resolveTheme(state.settings);
-    state.dialog = { type: 'themeEditor', id: '', name: '', bg: cur.bg.startsWith('#') ? cur.bg : '#170B15', accent: cur.accent, text: cur.text };
+    state.dialog = { type: 'themeEditor', id: '', name: '', bg: cur.bg.startsWith('#') ? cur.bg : '#170B15', accent: cur.accent, text: cur.text,
+      bg2: cur.bg2 || '', bgMode: cur.bgMode || 'glow', accent2: cur.accent2 || '', card: '', pattern: '', depth: 1, glow: 50 };
     renderOverlay();
     $('#te-name')?.focus();
   },
@@ -3214,7 +3579,8 @@ const actions = {
   saveTheme: () => {
     const d = state.dialog;
     const list = state.settings.customThemes || (state.settings.customThemes = []);
-    const theme = { id: d.id || 't' + Date.now().toString(36), name: d.name.trim() || t('te.namePlaceholder'), bg: d.bg, accent: d.accent, text: d.text };
+    const theme = { id: d.id || 't' + Date.now().toString(36), name: d.name.trim() || t('te.namePlaceholder'), bg: d.bg, accent: d.accent, text: d.text,
+      bg2: d.bg2 || '', bgMode: d.bgMode || 'glow', accent2: d.accent2 || '', card: d.card || '', pattern: d.pattern || '', depth: Number(d.depth ?? 1), glow: Number(d.glow ?? 50) };
     const at = list.findIndex((x) => x.id === theme.id);
     if (at >= 0) list[at] = theme; else list.push(theme);
     state.settings.theme = 'custom:' + theme.id;
@@ -3222,6 +3588,7 @@ const actions = {
     state.dialog = null;
     applySettings(); render(); saveSettings();
     toast(t('te.saved', { name: theme.name }));
+    checkAchievements();
   },
   deleteTheme: () => {
     const d = state.dialog;
@@ -3232,7 +3599,8 @@ const actions = {
   },
   exportTheme: async () => {
     const d = state.dialog;
-    const json = JSON.stringify({ spectiaTheme: 1, name: d.name, bg: d.bg, accent: d.accent, text: d.text }, null, 2);
+    const json = JSON.stringify({ spectiaTheme: 2, name: d.name, bg: d.bg, accent: d.accent, text: d.text, bg2: d.bg2 || '', bgMode: d.bgMode || 'glow',
+      accent2: d.accent2 || '', card: d.card || '', pattern: d.pattern || '', depth: d.depth ?? 1, glow: d.glow ?? 50 }, null, 2);
     try {
       if (!inApp) {
         const a = document.createElement('a');
@@ -3246,6 +3614,19 @@ const actions = {
     } catch (e) { toast(t('error.generic', { message: e }), true); }
   },
   importTheme: () => $('#theme-file')?.click(),
+  teSet: (d) => {
+    const dlg = state.dialog;
+    dlg[d.k] = d.k === 'depth' ? Number(d.v) : d.v;
+    if (d.k === 'bgMode' && d.v !== 'solid' && !dlg.bg2) dlg.bg2 = dlg.bg;
+    applyAppearance(state.settings, dlg); renderOverlay();
+  },
+  teToggleGrad: () => {
+    const dlg = state.dialog;
+    dlg.accent2 = dlg.accent2 ? '' : '#A07CFF';
+    applyAppearance(state.settings, dlg); renderOverlay();
+  },
+  setDepth: (d) => { state.settings.depth = Number(d.v); applySettings(); render(); saveSettings(); },
+  setPattern: (d) => { state.settings.pattern = d.v; applySettings(); render(); saveSettings(); },
   testChime: () => chime('ready', (state.settings.soundVolume ?? 60) / 100),
   toggleOn: (d) => {
     // Настройки, которые по умолчанию включены (undefined = включено)
@@ -3292,16 +3673,21 @@ document.addEventListener('input', (ev) => {
   const out = el.type === 'range' && document.getElementById(el.id + '-out');
   if (out) out.textContent = el.value + (el.dataset.unit || '');
   if ('live' in el.dataset) applyAppearance(state.settings);
-  if (el.id === 'musvol') audio.volume = Math.min(1, value / 100);
+
   if ('liveTheme' in el.dataset && state.dialog?.type === 'themeEditor') {
     const d = state.dialog;
     applyAppearance(state.settings, d);
-    el.parentElement.querySelector('.mono').textContent = el.value;
+    const lbl = el.parentElement.querySelector('.mono'); if (lbl) lbl.textContent = el.value;
     // Предупредим, если текст плохо читается на фоне
     const low = Math.abs(lumOf(d.text) - lumOf(d.bg)) < 0.4;
     if (low !== !!d.lowContrast) { d.lowContrast = low; renderOverlay(); }
   }
   if ('filterMods' in el.dataset) filterModRows();
+  if ('seek' in el.dataset && audio.duration) {
+    audio.currentTime = (Number(el.value) / 1000) * audio.duration;
+    el.style.setProperty('--p', Number(el.value) / 10 + '%');
+  }
+  if ('vol' in el.dataset) { audio.volume = Math.min(1, Number(el.value) / 100); el.style.setProperty('--p', el.value + '%'); }
   if ('palette' in el.dataset && state.palette) { state.palette.sel = 0; $('#pal-list').innerHTML = paletteListHtml(); }
   if ('logSearch' in el.dataset) { const v = $('#log-view'); if (v) v.innerHTML = logLinesHtml(currentLogText()); }
   if ('search' in el.dataset) {
@@ -3342,7 +3728,13 @@ document.addEventListener('change', (ev) => {
       const data = JSON.parse(text);
       const ok = (c) => /^#[0-9a-f]{6}$/i.test(c);
       if (!ok(data.bg) || !ok(data.accent) || !ok(data.text)) throw new Error('bad');
-      const theme = { id: 't' + Date.now().toString(36), name: String(data.name || file.name).slice(0, 30), bg: data.bg, accent: data.accent, text: data.text };
+      const opt = (c) => (ok(c) ? c : '');
+      const theme = { id: 't' + Date.now().toString(36), name: String(data.name || file.name).slice(0, 30), bg: data.bg, accent: data.accent, text: data.text,
+        bg2: opt(data.bg2), accent2: opt(data.accent2), card: opt(data.card),
+        bgMode: ['solid', 'vertical', 'diagonal', 'glow'].includes(data.bgMode) ? data.bgMode : 'glow',
+        pattern: ['', 'dots', 'grid', 'pixels', 'stars'].includes(data.pattern) ? data.pattern : '',
+        depth: [0, 1, 2].includes(Number(data.depth)) ? Number(data.depth) : 1,
+        glow: Math.max(0, Math.min(100, Number(data.glow ?? 50) || 0)) };
       (state.settings.customThemes ||= []).push(theme);
       state.settings.theme = 'custom:' + theme.id;
       applySettings(); render(); saveSettings();
@@ -3444,6 +3836,9 @@ async function init() {
   try { state.accounts = await api.listAccounts(); } catch { /* без аккаунтов тоже можно жить */ }
   try { state.running = new Set(await api.runningInstances()); } catch { /* ничего */ }
   try { state.msReady = await api.microsoftReady(); } catch { /* старый бэкенд */ }
+  loadFaces();
+  setTimeout(checkAchievements, 2000);
+  if (state.settings.menuMusic) startMenuMusic();
   render();
   if (state.settings.checkUpdates) {
     api.checkUpdate().then((u) => {
