@@ -1,10 +1,11 @@
-# Собирает установщик Spectia для Windows.
+# Собирает и проверяет Spectia.
 #
-# • Каждый раз, когда в ветку main приходит новый код, GitHub сам собирает .exe.
-#   Готовый файл лежит во вкладке Actions → нужная сборка → Artifacts.
-# • Выпустить релиз: Actions → «Сборка» → Run workflow → галочка «Выпустить релиз».
+# • tests   — проверки кода и настоящий запуск Minecraft (на Linux).
+# • windows — сборка установщика .exe (Actions → нужная сборка → Artifacts).
+# • release — выпуск релиза, только если обе части прошли успешно.
+#   Выпустить: Actions → «Сборка» → Run workflow → галочка «Выпустить релиз».
 #   Текст релиза (и окошка обновления в лаунчере) берётся из RELEASE_NOTES.md.
-# • Подробный лог каждой сборки сохраняется в ветку ci-logs (удобно искать ошибки).
+# • Подробные логи сохраняются в ветки ci-logs-tests и ci-logs-windows.
 
 name: Сборка
 
@@ -28,6 +29,36 @@ defaults:
     shell: bash
 
 jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Системные библиотеки для Tauri
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev > /dev/null
+
+      - name: Проверка кода на Rust
+        run: |
+          set -o pipefail
+          cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee -a ci.log
+
+      - name: Проверка запуска Minecraft (скачивание, Java, запуск)
+        run: |
+          set -o pipefail
+          cargo test --manifest-path src-tauri/Cargo.toml vanilla_end_to_end -- --ignored --nocapture 2>&1 | tee -a ci.log
+
+      - name: Сохранить лог
+        if: always()
+        run: bash .github/push-log.sh ci-logs-tests "${{ github.token }}" "${{ github.repository }}"
+
   windows:
     runs-on: windows-latest
     env:
@@ -49,16 +80,6 @@ jobs:
       - name: Установка инструментов
         run: npm install 2>&1 | tee -a ci.log
 
-      - name: Проверка кода на Rust
-        run: |
-          set -o pipefail
-          cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee -a ci.log
-
-      - name: Проверка запуска Minecraft (скачивание, Java, запуск)
-        run: |
-          set -o pipefail
-          cargo test --manifest-path src-tauri/Cargo.toml vanilla_end_to_end -- --ignored --nocapture 2>&1 | tee -a ci.log
-
       - name: Сборка установщика
         run: |
           set -o pipefail
@@ -69,20 +90,39 @@ jobs:
             npm run build 2>&1 | tee -a ci.log
           fi
 
+      - name: Подготовить файлы для обновления
+        run: node .github/latest-json.mjs "$(node -p "require('./src-tauri/tauri.conf.json').version")" 2>&1 | tee -a ci.log
+
       - name: Сохранить установщик
         uses: actions/upload-artifact@v4
         with:
           name: Spectia-Windows
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.sig
+            latest.json
 
-      - name: Подготовить релиз
+      - name: Сохранить лог
+        if: always()
+        run: bash .github/push-log.sh ci-logs-windows "${{ github.token }}" "${{ github.repository }}"
+
+  release:
+    needs: [tests, windows]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Spectia-Windows
+          path: dist
+
+      - name: Текст релиза
         id: rel
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.release
         run: |
-          set -e
           V=$(node -p "require('./src-tauri/tauri.conf.json').version")
           echo "v=$V" >> "$GITHUB_OUTPUT"
-          node .github/latest-json.mjs "$V"
           {
             cat RELEASE_NOTES.md
             echo
@@ -91,9 +131,9 @@ jobs:
             echo
             echo "Если Windows покажет окно «Windows защитила ваш компьютер», нажмите «Подробнее» → «Выполнить в любом случае». Так бывает с любой новой программой без платной цифровой подписи."
           } > release-body.md
+          find dist -type f
 
       - name: Опубликовать релиз
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.rel.outputs.v }}
@@ -101,17 +141,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           body_path: release-body.md
           files: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/*.sig
-            latest.json
-
-      - name: Сохранить лог сборки
-        if: always()
-        run: |
-          mkdir -p ci-out && cp ci.log ci-out/ 2>/dev/null || echo "нет лога" > ci-out/ci.log
-          cd ci-out
-          git init -q -b ci-logs
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-          git add -A && git commit -q -m "лог сборки ${{ github.run_id }}"
-          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-logs
+            dist/**/*.exe
+            dist/**/*.sig
+            dist/latest.json
