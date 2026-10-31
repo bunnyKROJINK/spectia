@@ -19,13 +19,21 @@ const AUTHLIB_INJECTOR_URL: &str = "https://authlib-injector.yushi.moe/artifact/
 
 /// Сообщает интерфейсу, что сейчас происходит.
 pub struct Progress {
-    app: AppHandle,
+    app: Option<AppHandle>,
     instance: String,
 }
 
 impl Progress {
     pub fn stage(&self, stage: &str, done: usize, total: usize) {
-        let _ = self.app.emit("launch-progress", json!({ "instanceId": self.instance, "stage": stage, "done": done, "total": total }));
+        if let Some(app) = &self.app {
+            let _ = app.emit("launch-progress", json!({ "instanceId": self.instance, "stage": stage, "done": done, "total": total }));
+        }
+    }
+
+    /// Без интерфейса (для проверок на GitHub)
+    #[cfg(test)]
+    pub fn silent() -> Self {
+        Self { app: None, instance: String::new() }
     }
 }
 
@@ -52,7 +60,7 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
     if running.0.lock().map_err(|e| e.to_string())?.contains_key(&id) {
         return Err("ALREADY_RUNNING".into());
     }
-    let progress = Progress { app: app.clone(), instance: id.clone() };
+    let progress = Progress { app: Some(app.clone()), instance: id.clone() };
     progress.stage("account", 0, 1);
 
     let inst = instances::read(&app, &id)?;
@@ -86,82 +94,16 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
 
     progress.stage("starting", 0, 1);
 
-    // ----- Переменные, которые подставляются в аргументы -----
-    let server = inst.auto_join_server.trim().to_string();
-    let quick_play = !server.is_empty() && game::has_feature(&version, "is_quick_play_multiplayer");
-    let mut features = game::Features::new();
-    features.insert("has_custom_resolution", !inst.fullscreen);
-    features.insert("is_quick_play_multiplayer", quick_play);
-
-    let sep = if cfg!(windows) { ";" } else { ":" };
-    let classpath = prepared.classpath.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join(sep);
     let s = |p: &Path| p.to_string_lossy().into_owned();
-    let mut vars: HashMap<&str, String> = HashMap::new();
-    vars.insert("auth_player_name", account.name.clone());
-    vars.insert("auth_uuid", account.id.clone());
-    vars.insert("auth_access_token", account.access_token.clone());
-    vars.insert("auth_session", format!("token:{}:{}", account.access_token, account.id));
-    vars.insert("auth_xuid", "0".into());
-    vars.insert("clientid", "0".into());
-    vars.insert("user_type", "mojang".into());
-    vars.insert("user_properties", "{}".into());
-    vars.insert("version_name", version.id.clone());
-    vars.insert("version_type", "Spectia".into());
-    vars.insert("game_directory", s(&game_dir));
-    vars.insert("assets_root", s(&prepared.assets_root));
-    vars.insert("game_assets", s(&prepared.game_assets));
-    vars.insert("assets_index_name", prepared.assets_index.clone());
-    vars.insert("natives_directory", s(&prepared.natives_dir));
-    vars.insert("library_directory", s(&data.join("libraries")));
-    vars.insert("classpath_separator", sep.into());
-    vars.insert("classpath", classpath);
-    vars.insert("launcher_name", "Spectia".into());
-    vars.insert("launcher_version", env!("CARGO_PKG_VERSION").into());
-    vars.insert("resolution_width", inst.window_width.to_string());
-    vars.insert("resolution_height", inst.window_height.to_string());
-    vars.insert("quickPlayMultiplayer", server.clone());
-    vars.insert("quickPlayPath", s(&game_dir.join("quickPlay").join("log.json")));
-
-    // ----- Аргументы Java -----
-    let mut args: Vec<String> = Vec::new();
-    if let Some(jar) = &authlib {
-        args.push(format!("-javaagent:{}=ely.by", jar.to_string_lossy()));
-    }
-    args.push(format!("-Xmx{}M", u32::from(inst.memory_gb.max(1)) * 1024));
-    args.push("-Xms512M".into());
-    match &version.arguments {
-        Some(a) if !a.jvm.is_empty() => args.extend(game::collect_args(&a.jvm, &features)),
-        _ => {
-            args.push("-Djava.library.path=${natives_directory}".into());
-            args.push("-cp".into());
-            args.push("${classpath}".into());
-        }
-    }
-    if let Some(log) = &prepared.logging_arg {
-        args.push(log.clone());
-    }
-    args.extend(split_args(&inst.jvm_args));
-    args.push(version.main_class.clone());
-
-    // ----- Аргументы игры -----
-    match (&version.arguments, &version.minecraft_arguments) {
-        (Some(a), _) if !a.game.is_empty() => args.extend(game::collect_args(&a.game, &features)),
-        (_, Some(old)) => {
-            args.extend(old.split_whitespace().map(String::from));
-            if !inst.fullscreen {
-                args.extend(["--width".into(), "${resolution_width}".into(), "--height".into(), "${resolution_height}".into()]);
-            }
-        }
-        _ => {}
-    }
-    if inst.fullscreen {
-        args.push("--fullscreen".into());
-    }
-    if !server.is_empty() && !quick_play {
-        let (host, port) = server.rsplit_once(':').filter(|(_, p)| p.parse::<u16>().is_ok()).unwrap_or((server.as_str(), "25565"));
-        args.extend(["--server".into(), host.to_string(), "--port".into(), port.to_string()]);
-    }
-    let args: Vec<String> = args.iter().map(|a| game::substitute(a, &vars)).collect();
+    let args = build_args(&Ctx {
+        version: &version,
+        prepared: &prepared,
+        inst: &inst,
+        account: &account,
+        data: &data,
+        game_dir: &game_dir,
+        authlib: authlib.as_deref(),
+    });
 
     // ----- Команда перед запуском -----
     let env = parse_env(&inst.env_vars);
@@ -244,6 +186,98 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
 
     Ok(())
 }
+
+/// Всё, из чего собирается команда запуска.
+struct Ctx<'a> {
+    version: &'a game::VersionJson,
+    prepared: &'a game::Prepared,
+    inst: &'a instances::Instance,
+    account: &'a accounts::Account,
+    data: &'a Path,
+    game_dir: &'a Path,
+    authlib: Option<&'a Path>,
+}
+
+/// Собирает аргументы для java: настройки памяти, библиотеки, главный класс и аргументы игры.
+fn build_args(c: &Ctx) -> Vec<String> {
+    let (version, prepared, inst, account, data, game_dir) = (c.version, c.prepared, c.inst, c.account, c.data, c.game_dir);
+    let server = inst.auto_join_server.trim().to_string();
+    let quick_play = !server.is_empty() && game::has_feature(&version, "is_quick_play_multiplayer");
+    let mut features = game::Features::new();
+    features.insert("has_custom_resolution", !inst.fullscreen);
+    features.insert("is_quick_play_multiplayer", quick_play);
+
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let classpath = prepared.classpath.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join(sep);
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let mut vars: HashMap<&str, String> = HashMap::new();
+    vars.insert("auth_player_name", account.name.clone());
+    vars.insert("auth_uuid", account.id.clone());
+    vars.insert("auth_access_token", account.access_token.clone());
+    vars.insert("auth_session", format!("token:{}:{}", account.access_token, account.id));
+    vars.insert("auth_xuid", "0".into());
+    vars.insert("clientid", "0".into());
+    vars.insert("user_type", "mojang".into());
+    vars.insert("user_properties", "{}".into());
+    vars.insert("version_name", version.id.clone());
+    vars.insert("version_type", "Spectia".into());
+    vars.insert("game_directory", s(&game_dir));
+    vars.insert("assets_root", s(&prepared.assets_root));
+    vars.insert("game_assets", s(&prepared.game_assets));
+    vars.insert("assets_index_name", prepared.assets_index.clone());
+    vars.insert("natives_directory", s(&prepared.natives_dir));
+    vars.insert("library_directory", s(&data.join("libraries")));
+    vars.insert("classpath_separator", sep.into());
+    vars.insert("classpath", classpath);
+    vars.insert("launcher_name", "Spectia".into());
+    vars.insert("launcher_version", env!("CARGO_PKG_VERSION").into());
+    vars.insert("resolution_width", inst.window_width.to_string());
+    vars.insert("resolution_height", inst.window_height.to_string());
+    vars.insert("quickPlayMultiplayer", server.clone());
+    vars.insert("quickPlayPath", s(&game_dir.join("quickPlay").join("log.json")));
+
+    // ----- Аргументы Java -----
+    let mut args: Vec<String> = Vec::new();
+    if let Some(jar) = c.authlib {
+        args.push(format!("-javaagent:{}=ely.by", jar.to_string_lossy()));
+    }
+    args.push(format!("-Xmx{}M", u32::from(inst.memory_gb.max(1)) * 1024));
+    args.push("-Xms512M".into());
+    match &version.arguments {
+        Some(a) if !a.jvm.is_empty() => args.extend(game::collect_args(&a.jvm, &features)),
+        _ => {
+            args.push("-Djava.library.path=${natives_directory}".into());
+            args.push("-cp".into());
+            args.push("${classpath}".into());
+        }
+    }
+    if let Some(log) = &prepared.logging_arg {
+        args.push(log.clone());
+    }
+    args.extend(split_args(&inst.jvm_args));
+    args.push(version.main_class.clone());
+
+    // ----- Аргументы игры -----
+    match (&version.arguments, &version.minecraft_arguments) {
+        (Some(a), _) if !a.game.is_empty() => args.extend(game::collect_args(&a.game, &features)),
+        (_, Some(old)) => {
+            args.extend(old.split_whitespace().map(String::from));
+            if !inst.fullscreen {
+                args.extend(["--width".into(), "${resolution_width}".into(), "--height".into(), "${resolution_height}".into()]);
+            }
+        }
+        _ => {}
+    }
+    if inst.fullscreen {
+        args.push("--fullscreen".into());
+    }
+    if !server.is_empty() && !quick_play {
+        let (host, port) = server.rsplit_once(':').filter(|(_, p)| p.parse::<u16>().is_ok()).unwrap_or((server.as_str(), "25565"));
+        args.extend(["--server".into(), host.to_string(), "--port".into(), port.to_string()]);
+    }
+    args.iter().map(|a| game::substitute(a, &vars)).collect()
+}
+
 
 /// authlib-injector — маленькая программа, которая направляет игру на серверы Ely.by
 /// (для входа и скинов). Рекомендована самим Ely.by.
@@ -355,5 +389,77 @@ mod tests {
     #[test]
     fn env() {
         assert_eq!(parse_env("A=1; B = two\nbad"), vec![("A".into(), "1".into()), ("B".into(), "two".into())]);
+    }
+
+    /// Настоящая проверка от начала до конца: скачивает версию игры и Java,
+    /// собирает команду запуска и запускает Minecraft на ~40 секунд.
+    /// Тяжёлая (качает сотни мегабайт), поэтому запускается только на GitHub:
+    ///   cargo test -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn vanilla_end_to_end() {
+        let version_id = std::env::var("SPECTIA_IT_VERSION").unwrap_or_else(|_| "26.3".into());
+        let data = std::env::temp_dir().join("spectia-it");
+        let game_dir = data.join("game");
+        std::fs::create_dir_all(&game_dir).unwrap();
+
+        let (java_path, args) = tauri::async_runtime::block_on(async {
+            let progress = Progress::silent();
+            let version = game::load_version(&data, &version_id).await.expect("описание версии");
+            let component = version.java_version.as_ref().map(|j| j.component.clone()).unwrap_or_else(|| "jre-legacy".into());
+            let java = java::ensure(&data, &component, &progress).await.expect("Java");
+            let prepared = game::prepare(&data, &game_dir, &version, &progress).await.expect("файлы игры");
+            println!("Java: {}  библиотек: {}", java.display(), prepared.classpath.len());
+            for p in &prepared.classpath {
+                assert!(p.exists(), "нет файла {}", p.display());
+            }
+            let inst = instances::Instance { memory_gb: 2, ..Default::default() };
+            let account = accounts::Account {
+                id: "8667ba71b85a4004af54457a9734eed7".into(),
+                name: "SpectiaTest".into(),
+                kind: "test".into(),
+                access_token: "0".into(),
+            };
+            let args = build_args(&Ctx {
+                version: &version,
+                prepared: &prepared,
+                inst: &inst,
+                account: &account,
+                data: &data,
+                game_dir: &game_dir,
+                authlib: None,
+            });
+            (java, args)
+        });
+        assert!(!args.iter().any(|a| a.contains("${")), "остались неподставленные переменные: {args:?}");
+
+        // На Windows для проверки берём java.exe (у javaw нет вывода в консоль — но мы и так пишем в файл)
+        let log_path = data.join("it.log");
+        let log = std::fs::File::create(&log_path).unwrap();
+        let mut child = Command::new(&java_path)
+            .args(&args)
+            .current_dir(&game_dir)
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .expect("запуск Java");
+
+        let started = Instant::now();
+        let mut found = false;
+        while started.elapsed() < Duration::from_secs(90) {
+            std::thread::sleep(Duration::from_secs(2));
+            let text = std::fs::read_to_string(&log_path).unwrap_or_default();
+            if text.contains("Setting user: SpectiaTest") || text.contains("Backend library: LWJGL") {
+                found = true;
+                std::thread::sleep(Duration::from_secs(5));
+                break;
+            }
+            if let Ok(Some(_)) = child.try_wait() {
+                break;
+            }
+        }
+        let _ = child.kill();
+        println!("----- лог игры -----\n{}", log_tail(&log_path, 80));
+        assert!(found, "Minecraft не дошёл до запуска, смотрите лог выше");
     }
 }

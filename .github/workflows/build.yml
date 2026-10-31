@@ -4,7 +4,7 @@
 #   Готовый файл лежит во вкладке Actions → нужная сборка → Artifacts.
 # • Выпустить релиз: Actions → «Сборка» → Run workflow → галочка «Выпустить релиз».
 #   Текст релиза (и окошка обновления в лаунчере) берётся из RELEASE_NOTES.md.
-# • Если сборка упала, подробный лог сохраняется в ветку ci-logs.
+# • Подробный лог каждой сборки сохраняется в ветку ci-logs (удобно искать ошибки).
 
 name: Сборка
 
@@ -54,6 +54,11 @@ jobs:
           set -o pipefail
           cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee -a ci.log
 
+      - name: Проверка запуска Minecraft (скачивание, Java, запуск)
+        run: |
+          set -o pipefail
+          cargo test --manifest-path src-tauri/Cargo.toml vanilla_end_to_end -- --ignored --nocapture 2>&1 | tee -a ci.log
+
       - name: Сборка установщика
         run: |
           set -o pipefail
@@ -100,8 +105,8 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.sig
             latest.json
 
-      - name: Сохранить лог ошибки
-        if: failure()
+      - name: Сохранить лог сборки
+        if: always()
         run: |
           mkdir -p ci-out && cp ci.log ci-out/ 2>/dev/null || echo "нет лога" > ci-out/ci.log
           cd ci-out

@@ -2,7 +2,8 @@
 //
 // Внутри настоящего приложения работает window.__TAURI__.
 // Если открыть index.html просто в браузере (для быстрой проверки дизайна),
-// вместо Rust подставляется «заглушка», которая хранит данные в localStorage.
+// вместо Rust подставляется «заглушка», которая хранит данные в localStorage
+// и понарошку изображает скачивание и запуск игры.
 
 const TAURI = window.__TAURI__;
 export const inApp = !!TAURI;
@@ -18,7 +19,26 @@ export const api = {
   updateInstance: (instance) => call('update_instance', { instance }),
   deleteInstance: (id) => call('delete_instance', { id }),
   openInstanceFolder: (id) => call('open_instance_folder', { id }),
+
+  listAccounts: () => call('list_accounts'),
+  addElyAccount: (username, password, totp) => call('add_ely_account', { username, password, totp: totp || null }),
+  setActiveAccount: (id) => call('set_active_account', { id }),
+  removeAccount: (id) => call('remove_account', { id }),
+
+  launch: (id) => call('launch_instance', { id }),
+  stop: (id) => call('stop_instance', { id }),
+  runningInstances: () => call('running_instances'),
+  readLaunchLog: (id) => call('read_launch_log', { id }),
+
+  checkUpdate: () => call('check_update'),
+  installUpdate: () => call('install_update'),
 };
+
+/** Подписка на события от Rust (прогресс скачивания, игра запущена/закрыта…). */
+export function on(event, handler) {
+  if (inApp) return TAURI.event.listen(event, (e) => handler(e.payload));
+  (mockListeners[event] ||= []).push(handler);
+}
 
 export const win = {
   minimize: () => inApp && TAURI.window.getCurrentWindow().minimize(),
@@ -34,6 +54,10 @@ export function openUrl(url) {
 
 // ---------- Заглушка для браузера ----------
 
+const mockListeners = {};
+const emit = (event, payload) => (mockListeners[event] || []).forEach((h) => h(payload));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 const store = {
   get(key, fallback) {
     try { return JSON.parse(localStorage.getItem('spectia:' + key)) ?? fallback; } catch { return fallback; }
@@ -48,8 +72,15 @@ const DEFAULT_SETTINGS = {
   checkUpdates: true, autoJava: true, curseforgeKey: '',
 };
 
+const mockRunning = new Set();
+
+function accountInfo() {
+  const s = store.get('accounts', { active: '', accounts: [] });
+  return s.accounts.map((a) => ({ ...a, active: a.id === s.active }));
+}
+
 async function mockInvoke(cmd, args = {}) {
-  await new Promise((r) => setTimeout(r, 120));
+  await sleep(120);
   switch (cmd) {
     case 'get_settings': return { ...DEFAULT_SETTINGS, ...store.get('settings', {}) };
     case 'save_settings': store.set('settings', args.settings); return null;
@@ -83,6 +114,59 @@ async function mockInvoke(cmd, args = {}) {
       store.set('instances', store.get('instances', []).filter((i) => i.id !== args.id));
       return null;
     case 'open_instance_folder': return null;
+
+    case 'list_accounts': return accountInfo();
+    case 'add_ely_account': {
+      await sleep(500);
+      if (args.password === 'wrong') throw 'ELY_BAD_CREDENTIALS';
+      if (args.password === '2fa' && !args.totp) throw 'ELY_2FA';
+      const s = store.get('accounts', { active: '', accounts: [] });
+      const id = 'ely-' + args.username.toLowerCase();
+      s.accounts = s.accounts.filter((a) => a.id !== id).concat({ id, name: args.username, kind: 'ely' });
+      s.active = id;
+      store.set('accounts', s);
+      return accountInfo();
+    }
+    case 'set_active_account': {
+      const s = store.get('accounts', { active: '', accounts: [] });
+      s.active = args.id; store.set('accounts', s);
+      return accountInfo();
+    }
+    case 'remove_account': {
+      const s = store.get('accounts', { active: '', accounts: [] });
+      s.accounts = s.accounts.filter((a) => a.id !== args.id);
+      if (s.active === args.id) s.active = s.accounts[0]?.id || '';
+      store.set('accounts', s);
+      return accountInfo();
+    }
+
+    case 'launch_instance': {
+      const inst = store.get('instances', []).find((i) => i.id === args.id);
+      if (!accountInfo().some((a) => a.active)) throw 'NO_ACCOUNT';
+      if (inst?.loader !== 'vanilla') throw 'LOADER_NOT_YET';
+      for (const [stage, total] of [['account', 1], ['version', 1], ['java', 40], ['libraries', 60], ['assets', 120], ['starting', 1]]) {
+        for (let n = 0; n <= total; n += Math.ceil(total / 6)) {
+          emit('launch-progress', { instanceId: args.id, stage, done: Math.min(n, total), total });
+          await sleep(90);
+        }
+      }
+      mockRunning.add(args.id);
+      emit('game-state', { instanceId: args.id, running: true });
+      return null;
+    }
+    case 'stop_instance':
+      mockRunning.delete(args.id);
+      emit('game-state', { instanceId: args.id, running: false, exitCode: 1, log: '[Render thread/ERROR]: пример лога ошибки\njava.lang.RuntimeException: демо', seconds: 3 });
+      return null;
+    case 'running_instances': return [...mockRunning];
+    case 'read_launch_log': return 'демо-лог';
+    case 'check_update':
+      return new URLSearchParams(location.search).has('update')
+        ? { version: '0.3.0', currentVersion: '0.2.0', notes: '## Что нового\n\n- **Fabric, Forge и NeoForge**\n- Установка модов в один клик', date: null }
+        : null;
+    case 'install_update':
+      for (let d = 0; d <= 100; d += 10) { emit('update-progress', { downloaded: d, total: 100 }); await sleep(120); }
+      return null;
     default: throw new Error('unknown command ' + cmd);
   }
 }

@@ -6,7 +6,7 @@
 //  • Кнопки помечены data-action="…", а их обработчики лежат в объекте `actions`.
 //  • Поля ввода помечены data-bind="путь.в.state" и сами записывают туда значение.
 
-import { api, win, openUrl, inApp } from './api.js';
+import { api, win, openUrl, inApp, on } from './api.js';
 import { t, setLang, LANGS, formatNumber } from './i18n.js';
 import { THEMES, THEME_ORDER, TINTS, applyTheme } from './themes.js';
 import { icon, heroArt } from './icons.js';
@@ -39,9 +39,14 @@ const state = {
   advOpen: false,
   res: { query: '', kind: 'mod', source: 'modrinth', results: null, loading: false, error: false, targetId: null },
   skins: { model: 'classic', selected: 0 },
+  accounts: [],
+  ely: { username: '', password: '', totp: '', need2fa: false, busy: false, error: '' },
+  running: new Set(),      // id запущенных сборок
+  progress: {},            // id → { stage, done, total } пока идёт подготовка к запуску
+  update: null,            // { version, currentVersion, notes } если вышла новая версия
+  updating: null,          // { downloaded, total } пока качается обновление
   dialog: null,
   toast: null,
-  launching: false,
 };
 
 // ---------- Маленькие помощники ----------
@@ -52,6 +57,7 @@ const $ = (sel) => document.querySelector(sel);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const selected = () => state.instances.find((i) => i.id === state.selectedId) || state.instances[0] || null;
+const activeAccount = () => state.accounts.find((a) => a.active) || null;
 const loaderLabel = (id) => (id === 'vanilla' ? t('loader.none') : t('loader.' + id));
 const tint = (n) => TINTS[n] || TINTS[0];
 const pressed = (on) => `aria-pressed="${on ? 'true' : 'false'}"`;
@@ -122,6 +128,38 @@ function pageHead(title, backAction) {
   </div>`;
 }
 
+// ---------- Кнопка «Играть» ----------
+
+function playButton(id) {
+  if (state.running.has(id)) {
+    return `<button class="play" data-action="stop" data-id="${esc(id)}" style="background:rgba(255,255,255,.14);color:#fff;box-shadow:none">
+      <span class="pulse"></span><span>${esc(t('launch.stop'))}</span></button>`;
+  }
+  const p = state.progress[id];
+  if (p) {
+    return `<button class="play" disabled style="cursor:default"><span class="spinner" style="border-color:rgba(0,0,0,.2);border-top-color:currentColor"></span><span>${esc(t('home.launching'))}</span></button>`;
+  }
+  return `<button class="play" data-action="play" data-id="${esc(id)}">${icon.play()}<span>${esc(t('home.play'))}</span></button>`;
+}
+
+function progressBar(id) {
+  const p = state.progress[id];
+  if (state.running.has(id)) {
+    return `<div class="launch-status"><span class="pulse"></span>${esc(t('launch.running'))}</div>`;
+  }
+  if (!p) return '';
+  const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+  const counted = ['java', 'libraries', 'assets'].includes(p.stage) && p.total > 1;
+  return `<div class="launch-status">
+    <div class="row between" style="width:100%">
+      <span>${esc(t('launch.stage.' + p.stage))}${counted ? ` ${p.done} / ${p.total}` : ''}</span>
+      ${counted ? `<span>${pct}%</span>` : ''}
+    </div>
+    <div class="bar"><span style="width:${counted ? pct : 100}%" class="${counted ? '' : 'indeterminate'}"></span></div>
+    ${p.stage === 'assets' || p.stage === 'java' ? `<span class="small" style="opacity:.8">${esc(t('launch.firstTime'))}</span>` : ''}
+  </div>`;
+}
+
 // ---------- Экраны ----------
 
 function viewHome() {
@@ -155,9 +193,10 @@ function viewHome() {
         </div>
         <div class="row">
           <button class="icon-btn" data-action="openInstance" data-id="${esc(cur.id)}" aria-label="${esc(t('home.instanceSettings'))}" title="${esc(t('home.instanceSettings'))}">${icon.gear()}</button>
-          <button class="play" data-action="play">${icon.play()}<span>${esc(t(state.launching ? 'home.launching' : 'home.play'))}</span></button>
+          ${playButton(cur.id)}
         </div>
       </div>
+      ${progressBar(cur.id)}
     </section>
 
     <section class="panel pad-s stack" style="gap:12px" aria-label="${esc(t('home.myInstances'))}">
@@ -202,7 +241,9 @@ function viewInstances() {
       <div class="row" style="gap:8px">
         <button class="icon-btn" data-action="openInstance" data-id="${esc(i.id)}" aria-label="${esc(t('home.instanceSettings'))}" title="${esc(t('home.instanceSettings'))}">${icon.gear(18)}</button>
         <button class="icon-btn" data-action="openFolder" data-id="${esc(i.id)}" aria-label="${esc(t('inst.openFolder'))}" title="${esc(t('inst.openFolder'))}">${icon.folder()}</button>
-        <button class="btn accent" style="height:40px" data-action="playInstance" data-id="${esc(i.id)}">${esc(t('inst.play'))}</button>
+        ${state.running.has(i.id)
+          ? `<button class="btn" style="height:40px" data-action="stop" data-id="${esc(i.id)}">${esc(t('launch.stop'))}</button>`
+          : `<button class="btn accent" style="height:40px" data-action="playInstance" data-id="${esc(i.id)}" ${state.progress[i.id] ? 'disabled' : ''}>${esc(t('inst.play'))}</button>`}
       </div>
     </div>`).join('');
 
@@ -510,22 +551,37 @@ function viewSkins() {
 }
 
 function viewAccounts() {
+  const list = state.accounts.length
+    ? `<section class="panel list">${state.accounts.map((a) => `
+        <div class="list-row">
+          <span class="avatar" style="${a.kind === 'ely' ? 'background:#207E5C' : ''}">${esc(a.name.charAt(0).toUpperCase())}</span>
+          <div class="stack grow" style="gap:2px">
+            <span class="card-title">${esc(a.name)}</span>
+            <span class="small muted">${esc(t('acc.kind.' + a.kind))}</span>
+          </div>
+          ${a.active
+            ? `<span class="badge" style="background:var(--accent-soft);color:var(--accent-text);padding:6px 12px">${esc(t('acc.active'))}</span>`
+            : `<button class="btn sm" data-action="setActiveAccount" data-id="${esc(a.id)}">${esc(t('acc.makeActive'))}</button>`}
+          <button class="icon-btn" data-action="removeAccount" data-id="${esc(a.id)}" aria-label="${esc(t('acc.remove'))}" title="${esc(t('acc.remove'))}">${icon.trash()}</button>
+        </div>`).join('')}</section>`
+    : `<section class="panel empty"><h2 class="h2">${esc(t('acc.none'))}</h2><p class="note">${esc(t('acc.noneSub'))}</p></section>`;
+
   return `<div class="view">
     <h1 class="page-title">${esc(t('acc.title'))}</h1>
-    <section class="panel empty"><h2 class="h2">${esc(t('acc.none'))}</h2><p class="note">${esc(t('acc.noneSub'))}</p></section>
+    ${list}
     <h2 class="h2" style="margin:8px 0 0 4px">${esc(t('acc.add'))}</h2>
     <div class="grid grid-2">
-      <section class="panel pad stack">
-        ${icon.microsoft()}
-        <h3 class="h2">${esc(t('acc.ms'))}</h3>
-        <p class="note">${esc(t('acc.msText'))}</p>
-        <button class="btn accent" style="align-self:flex-start" data-action="soon">${esc(t('acc.msBtn'))}</button>
-      </section>
       <section class="panel pad stack">
         <span class="avatar" style="width:28px;height:28px;border-radius:6px;font-size:14px;background:#207E5C">E</span>
         <h3 class="h2">${esc(t('acc.ely'))}</h3>
         <p class="note">${esc(t('acc.elyText'))}</p>
-        <button class="btn" style="align-self:flex-start" data-action="soon">${esc(t('acc.elyBtn'))}</button>
+        <button class="btn accent" style="align-self:flex-start" data-action="openEly">${esc(t('acc.elyBtn'))}</button>
+      </section>
+      <section class="panel pad stack">
+        ${icon.microsoft()}
+        <h3 class="h2">${esc(t('acc.ms'))}</h3>
+        <p class="note">${esc(t('acc.msText'))}</p>
+        <button class="btn" style="align-self:flex-start" data-action="msSoon">${esc(t('acc.msBtn'))}</button>
       </section>
     </div>
   </div>`;
@@ -607,11 +663,87 @@ function renderChrome() {
     <div class="stack" style="gap:8px">
       <span class="small muted" style="padding:0 4px">${esc(t('nav.account'))}</span>
       <button class="account" data-action="nav" data-view="accounts" aria-label="${esc(t('nav.manageAccounts'))}">
-        <span class="avatar">?</span>
-        <span class="stack grow" style="gap:2px"><span style="font-weight:600">${esc(t('acc.notSigned'))}</span><span class="small muted">Microsoft · Ely.by</span></span>
+        ${(() => {
+          const a = activeAccount();
+          return a
+            ? `<span class="avatar" style="${a.kind === 'ely' ? 'background:#207E5C' : ''}">${esc(a.name.charAt(0).toUpperCase())}</span>
+               <span class="stack grow" style="gap:2px;min-width:0"><span class="ellipsis" style="font-weight:600">${esc(a.name)}</span><span class="small muted">${esc(t('acc.kind.' + a.kind))}</span></span>`
+            : `<span class="avatar">?</span>
+               <span class="stack grow" style="gap:2px"><span style="font-weight:600">${esc(t('acc.notSigned'))}</span><span class="small muted">Microsoft · Ely.by</span></span>`;
+        })()}
         ${icon.chevronRight()}
       </button>
     </div>`;
+}
+
+function elyDialog() {
+  const e = state.ely;
+  return `<div class="overlay" data-action="closeDialog"><form class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop data-submit="elySubmit">
+    <div class="row" style="gap:12px">
+      <span class="avatar" style="width:36px;height:36px;border-radius:8px;background:#207E5C">E</span>
+      <h2 id="dlg-title">${esc(t('acc.elyDialogTitle'))}</h2>
+    </div>
+    ${e.need2fa ? `
+      <p class="note">${esc(t('acc.totpNote'))}</p>
+      <div class="field"><label for="ely-totp" class="label">${esc(t('acc.totp'))}</label>
+        <input id="ely-totp" class="input mono" inputmode="numeric" autocomplete="one-time-code" maxlength="8" value="${esc(e.totp)}" data-bind="ely.totp" autofocus></div>`
+    : `
+      <div class="field"><label for="ely-login" class="label">${esc(t('acc.login'))}</label>
+        <input id="ely-login" class="input" autocomplete="username" value="${esc(e.username)}" data-bind="ely.username" autofocus></div>
+      <div class="field"><label for="ely-pass" class="label">${esc(t('acc.password'))}</label>
+        <input id="ely-pass" class="input" type="password" autocomplete="current-password" value="${esc(e.password)}" data-bind="ely.password"></div>
+      <p class="note">${esc(t('acc.passwordNote'))}</p>`}
+    ${e.error ? `<p class="warn" role="alert">${esc(e.error)}</p>` : ''}
+    <div class="row between">
+      <a href="#" class="small" data-action="openUrl" data-url="https://account.ely.by/register">${esc(t('acc.register'))}</a>
+      <div class="row">
+        <button type="button" class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
+        <button type="submit" class="btn accent" ${e.busy ? 'disabled' : ''}>${e.busy ? '<span class="spinner"></span>' : ''}${esc(t('acc.signIn'))}</button>
+      </div>
+    </div>
+  </form></div>`;
+}
+
+/** Очень простая разметка для списка изменений: заголовки, пункты списка и **жирный**. */
+function miniMarkdown(text) {
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  let html = '';
+  let inList = false;
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (/^[-*] /.test(line)) {
+      if (!inList) { html += '<ul>'; inList = true; }
+      html += `<li>${inline(line.slice(2))}</li>`;
+      continue;
+    }
+    if (inList) { html += '</ul>'; inList = false; }
+    if (!line || line === '---') continue;
+    if (line.startsWith('#')) html += `<p class="h2" style="margin-top:4px">${inline(line.replace(/^#+\s*/, ''))}</p>`;
+    else html += `<p>${inline(line)}</p>`;
+  }
+  return html + (inList ? '</ul>' : '');
+}
+
+function updateDialog() {
+  const u = state.update;
+  const busy = state.updating;
+  const pct = busy && busy.total ? Math.round((busy.downloaded / busy.total) * 100) : 0;
+  return `<div class="overlay" ${busy ? '' : 'data-action="closeDialog"'}><div class="dialog" style="max-width:560px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+    <div class="row" style="gap:14px;flex-wrap:nowrap;align-items:flex-start">
+      <span class="avatar" style="background:var(--accent);color:var(--accent-ink)">${icon.moon(22)}</span>
+      <div class="stack" style="gap:4px">
+        <h2 id="dlg-title">${esc(t('upd.title', { version: u.version }))}</h2>
+        <p class="note">${esc(t('upd.subtitle', { current: u.currentVersion }))}</p>
+      </div>
+    </div>
+    <div class="notes">${miniMarkdown(u.notes)}</div>
+    ${busy ? `<div class="stack" style="gap:8px"><span class="small muted">${esc(t('upd.installing'))} ${pct}%</span>
+      <div class="bar"><span style="width:${pct}%"></span></div></div>` : `
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn" data-action="closeDialog">${esc(t('upd.later'))}</button>
+      <button class="btn accent" data-action="installUpdate">${esc(t('upd.install'))}</button>
+    </div>`}
+  </div></div>`;
 }
 
 function renderOverlay() {
@@ -635,6 +767,30 @@ function renderOverlay() {
       </div>
     </div>`;
   }
+  if (d?.type === 'ely') html += elyDialog();
+  if (d?.type === 'noAccount') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <h2 id="dlg-title">${esc(t('launch.noAccountTitle'))}</h2>
+      <p class="note">${esc(t('launch.noAccountText'))}</p>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
+        <button class="btn accent" data-action="openEly">${esc(t('launch.goAccounts'))}</button>
+      </div></div></div>`;
+  }
+  if (d?.type === 'crash') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" style="max-width:720px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="row" style="align-items:flex-start;gap:14px;flex-wrap:nowrap">
+        <span class="avatar" style="background:var(--warn-soft);color:var(--warn-text)">${icon.warn()}</span>
+        <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('launch.crashTitle'))}</h2><p class="note">${esc(t('launch.crashText'))}</p></div>
+      </div>
+      <pre class="log">${esc(d.log || '—')}</pre>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="openFolder" data-id="${esc(d.id)}">${icon.folder()}<span>${esc(t('inst.openFolder'))}</span></button>
+        <button class="btn" data-action="copyLog">${esc(t('launch.copyLog'))}</button>
+        <button class="btn accent" data-action="closeDialog">${esc(t('common.close'))}</button>
+      </div></div></div>`;
+  }
+  if (d?.type === 'update' && state.update) html += updateDialog();
   if (state.toast) html += `<div class="toast ${state.toast.error ? 'error' : ''}" role="status">${esc(state.toast.text)}</div>`;
   $('#overlay').innerHTML = html;
 }
@@ -676,6 +832,68 @@ async function runSearch() {
   if (state.view === 'resources') render();
 }
 
+// ---------- Запуск игры ----------
+
+const LAUNCH_ERRORS = {
+  ALREADY_RUNNING: () => t('launch.alreadyRunning'),
+  ELY_RELOGIN: () => t('launch.relogin'),
+  PRE_LAUNCH_FAILED: () => t('launch.preLaunchFailed'),
+};
+
+const stopping = new Set();
+
+async function launch(id) {
+  if (state.progress[id] || state.running.has(id)) return;
+  if (!activeAccount()) {
+    state.dialog = { type: 'noAccount' };
+    renderOverlay();
+    return;
+  }
+  state.progress[id] = { stage: 'account', done: 0, total: 1 };
+  render();
+  try {
+    await api.launch(id);
+  } catch (e) {
+    delete state.progress[id];
+    const code = String(e);
+    const inst = state.instances.find((i) => i.id === id);
+    if (code === 'NO_ACCOUNT') { state.dialog = { type: 'noAccount' }; }
+    else if (code === 'LOADER_NOT_YET') toast(t('launch.loaderNotYet', { loader: t('loader.' + (inst?.loader || 'fabric')) }));
+    else if (code.startsWith('JAVA_START_FAILED')) toast(t('launch.javaFailed'), true);
+    else if (LAUNCH_ERRORS[code]) toast(LAUNCH_ERRORS[code](), true);
+    else toast(t('launch.failed', { message: code }), true);
+    if (code === 'ELY_RELOGIN') { state.view = 'accounts'; }
+  }
+  render();
+}
+
+function subscribe() {
+  on('launch-progress', (p) => {
+    state.progress[p.instanceId] = p;
+    // Перерисовываем только полоску прогресса, если она уже на экране, — так меньше нагрузки.
+    const bar = document.querySelector('.hero .launch-status');
+    if (bar && state.view === 'home' && selected()?.id === p.instanceId) {
+      bar.outerHTML = progressBar(p.instanceId);
+    } else if (state.view === 'home' || state.view === 'instances') {
+      render();
+    }
+  });
+  on('game-state', (g) => {
+    delete state.progress[g.instanceId];
+    if (g.running) state.running.add(g.instanceId);
+    else {
+      state.running.delete(g.instanceId);
+      const byUser = stopping.delete(g.instanceId);
+      if (!byUser && g.exitCode && g.exitCode !== 0) state.dialog = { type: 'crash', id: g.instanceId, log: g.log };
+    }
+    render();
+  });
+  on('update-progress', (u) => {
+    state.updating = u;
+    renderOverlay();
+  });
+}
+
 // ---------- Действия кнопок ----------
 
 const actions = {
@@ -691,9 +909,61 @@ const actions = {
   soon: () => toast(t('common.comingSoon')),
   openUrl: (d) => openUrl(d.url),
 
-  select: (d) => { state.selectedId = d.id; state.launching = false; render(); },
-  play: () => toast(t('home.playSoon')),
-  playInstance: (d) => { state.selectedId = d.id; go('home'); toast(t('home.playSoon')); },
+  select: (d) => { state.selectedId = d.id; render(); },
+  play: (d) => launch(d.id),
+  playInstance: (d) => { state.selectedId = d.id; go('home'); launch(d.id); },
+  stop: async (d) => {
+    stopping.add(d.id); // игру закрыли сами — окошко с ошибкой показывать не нужно
+    try { await api.stop(d.id); } catch (e) { stopping.delete(d.id); toast(t('error.generic', { message: e }), true); }
+  },
+  copyLog: async () => {
+    try { await navigator.clipboard.writeText(state.dialog?.log || ''); toast(t('launch.copied')); } catch { /* не страшно */ }
+  },
+
+  openEly: () => {
+    state.ely = { username: state.ely.username, password: '', totp: '', need2fa: false, busy: false, error: '' };
+    state.dialog = { type: 'ely' };
+    renderOverlay();
+    $('#ely-login')?.focus();
+  },
+  elySubmit: async () => {
+    const e = state.ely;
+    if (e.busy) return;
+    e.busy = true; e.error = ''; renderOverlay();
+    try {
+      state.accounts = await api.addElyAccount(e.username, e.password, e.need2fa ? e.totp : null);
+      state.dialog = null;
+      state.ely = { username: '', password: '', totp: '', need2fa: false, busy: false, error: '' };
+      render();
+      toast(t('acc.welcome', { name: activeAccount()?.name ?? '' }));
+      return;
+    } catch (err) {
+      const code = String(err);
+      if (code === 'ELY_2FA' && !e.need2fa) { e.need2fa = true; e.error = ''; }
+      else if (code === 'ELY_2FA' || code === 'ELY_BAD_CREDENTIALS') e.error = t('acc.badCredentials');
+      else if (code.startsWith('NETWORK')) e.error = t('acc.network');
+      else e.error = code;
+    }
+    e.busy = false;
+    renderOverlay();
+    (e.need2fa ? $('#ely-totp') : $('#ely-pass'))?.focus();
+  },
+  setActiveAccount: async (d) => { state.accounts = await api.setActiveAccount(d.id); render(); },
+  removeAccount: async (d) => { state.accounts = await api.removeAccount(d.id); render(); toast(t('acc.removed')); },
+  msSoon: () => toast(t('acc.msSoon')),
+
+  installUpdate: async () => {
+    state.updating = { downloaded: 0, total: 0 };
+    renderOverlay();
+    try {
+      await api.installUpdate(); // на Windows лаунчер закроется сам и откроется уже новым
+    } catch (e) {
+      state.updating = null;
+      state.dialog = null;
+      renderOverlay();
+      toast(t('upd.failed', { message: e }), true);
+    }
+  },
   openFolder: async (d) => {
     if (!inApp) return toast(t('common.comingSoon'));
     try { await api.openInstanceFolder(d.id); } catch (e) { toast(t('error.generic', { message: e }), true); }
@@ -748,7 +1018,10 @@ const actions = {
     }
   },
   askDelete: (d) => { state.dialog = { type: 'confirmDelete', id: d.id }; renderOverlay(); },
-  closeDialog: () => { state.dialog = null; renderOverlay(); },
+  closeDialog: () => {
+    if (state.updating) return;
+    state.dialog = null; renderOverlay();
+  },
   confirmDelete: async (d) => {
     state.dialog = null;
     try {
@@ -813,6 +1086,13 @@ document.addEventListener('change', (ev) => {
   if ('saveSettings' in el.dataset) saveSettings();
 });
 
+document.addEventListener('submit', (ev) => {
+  const form = ev.target.closest('[data-submit]');
+  if (!form) return;
+  ev.preventDefault();
+  actions[form.dataset.submit]?.();
+});
+
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape' && state.dialog) actions.closeDialog();
 });
@@ -826,8 +1106,16 @@ async function init() {
     state.settings = { theme: 'sakura', language: 'ru', reduceMotion: false, hideOnLaunch: true, checkUpdates: true, autoJava: true, curseforgeKey: '' };
   }
   applySettings();
+  subscribe();
   try { await loadInstances(); } catch (e) { toast(t('error.generic', { message: e }), true); }
+  try { state.accounts = await api.listAccounts(); } catch { /* без аккаунтов тоже можно жить */ }
+  try { state.running = new Set(await api.runningInstances()); } catch { /* ничего */ }
   render();
+  if (state.settings.checkUpdates) {
+    api.checkUpdate().then((u) => {
+      if (u) { state.update = u; state.dialog = state.dialog || { type: 'update' }; renderOverlay(); }
+    }).catch(() => { /* нет интернета или GitHub недоступен — проверим в следующий раз */ });
+  }
   document.body.classList.add('ready');
   loadVersions(); // заранее, чтобы экран «Новая сборка» открывался мгновенно
 }

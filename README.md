@@ -20,8 +20,11 @@
 - [x] Создание сборок: версия Minecraft прямо с серверов Mojang, загрузчик Fabric / Forge / NeoForge / Quilt
 - [x] Настройки каждой сборки: память, Java, окно, автовход на сервер и раздел «Для продвинутых»
 - [x] Поиск модов, шейдеров, текстурпаков, датапаков и сборок на Modrinth
-- [ ] Запуск игры
-- [ ] Вход через Microsoft и Ely.by
+- [x] Запуск ванильного Minecraft: игра и нужная Java скачиваются сами
+- [x] Вход через Ely.by (с двухфакторной защитой)
+- [x] Автообновление лаунчера
+- [ ] Fabric, Quilt, Forge и NeoForge
+- [ ] Вход через Microsoft
 - [ ] Установка модов в один клик
 - [ ] CurseForge (ждём ключ API) и понятное окно для модов, которые можно скачать только с сайта
 - [ ] Импорт и экспорт сборок (.mrpack, CurseForge, Prism / MultiMC)
@@ -29,7 +32,7 @@
 
 ## Как скачать
 
-Готовый установщик для Windows появляется во вкладке **Releases** (или **Actions → последняя сборка → Artifacts**).
+Готовый установщик для Windows лежит во вкладке **Releases**. Начиная с версии 0.2.0, Spectia обновляется сама.
 
 ## Для разработчиков
 
@@ -44,6 +47,11 @@ src-tauri/           Rust-часть
   src/instances.rs   сборки
   src/settings.rs    настройки
   src/versions.rs    список версий Minecraft
+  src/accounts.rs    вход через Ely.by
+  src/game.rs        файлы игры: библиотеки, ассеты, аргументы
+  src/java.rs        Java от Mojang
+  src/launch.rs      запуск игры
+  src/updater.rs     автообновление
 ```
 
 Понадобятся [Rust](https://rustup.rs) и [Node.js](https://nodejs.org). Затем:
@@ -76,7 +84,7 @@ Spectia не является официальным продуктом Minecraf
 
 ## English
 
-Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. It features six themes, Russian and English UI, instance management with per-instance settings, and Modrinth search. Game launching, Microsoft / Ely.by sign-in, one-click mod installs and CurseForge support are in progress.
+Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. It features six themes, Russian and English UI, instance management with per-instance settings, Modrinth search, Ely.by sign-in, vanilla game launching with automatic Java download, and self-updates. Mod loaders, Microsoft sign-in, one-click mod installs and CurseForge support are in progress.
 
 Build: install Rust and Node.js, then run `npm install` and `npm run build`.
 
