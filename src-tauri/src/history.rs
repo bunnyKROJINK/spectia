@@ -22,6 +22,12 @@ pub struct Event {
     pub name: String,
     #[serde(default)]
     pub detail: String,
+    /// Файл в корзине (mod-trash), который можно вернуть
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub restore: String,
+    /// Файл, который нужно убрать при откате (новая версия после обновления)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub replaced: String,
 }
 
 fn now() -> u64 {
@@ -63,8 +69,59 @@ fn append(inst_dir: &Path, ev: &Event) {
 
 /// Записать событие и обновить снимок папки
 pub fn log(inst_dir: &Path, action: &str, name: &str, detail: &str) {
-    append(inst_dir, &Event { time: now(), action: action.into(), name: name.into(), detail: detail.into() });
+    log_undo(inst_dir, action, name, detail, "", "");
+}
+
+/// Записать событие, которое можно откатить
+pub fn log_undo(inst_dir: &Path, action: &str, name: &str, detail: &str, restore: &str, replaced: &str) {
+    append(inst_dir, &Event { time: now(), action: action.into(), name: name.into(), detail: detail.into(), restore: restore.into(), replaced: replaced.into() });
     sync(inst_dir);
+}
+
+/// Копия файла в корзину сборки перед удалением или обновлением. Возвращает имя копии.
+pub fn stash(inst_dir: &Path, file: &Path) -> Option<String> {
+    let trash = inst_dir.join("mod-trash");
+    std::fs::create_dir_all(&trash).ok()?;
+    let name = format!("{}-{}", now(), file.file_name()?.to_string_lossy());
+    std::fs::copy(file, trash.join(&name)).ok()?;
+    // Храним не больше 60 файлов: самые старые удаляем
+    if let Ok(rd) = std::fs::read_dir(&trash) {
+        let mut all: Vec<_> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        all.sort();
+        let extra = all.len().saturating_sub(60);
+        for old in all.into_iter().take(extra) {
+            let _ = std::fs::remove_file(trash.join(old));
+        }
+    }
+    Some(name)
+}
+
+fn plain(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['/', '\\']) && !name.contains("..")
+}
+
+/// «Вернуть как было»: достаём файл из корзины (и убираем новую версию, если это было обновление)
+#[tauri::command]
+pub fn undo_event(app: AppHandle, id: String, time: u64, restore: String) -> Result<String, String> {
+    let dir = instances::dir(&app, &id)?;
+    let ev = read(&dir).into_iter().find(|e| e.time == time && e.restore == restore).ok_or("нет такого события")?;
+    if !plain(&ev.restore) {
+        return Err("нечего возвращать".into());
+    }
+    let src = dir.join("mod-trash").join(&ev.restore);
+    if !src.exists() {
+        return Err("TRASH_GONE".into());
+    }
+    let mods = dir.join("minecraft").join("mods");
+    let original = ev.restore.splitn(2, '-').nth(1).unwrap_or(&ev.restore).to_string();
+    if plain(&ev.replaced) {
+        let _ = std::fs::remove_file(mods.join(&ev.replaced));
+        let _ = std::fs::remove_file(mods.join(format!("{}.disabled", ev.replaced.trim_end_matches(".disabled"))));
+    }
+    std::fs::create_dir_all(&mods).map_err(|e| e.to_string())?;
+    std::fs::rename(&src, mods.join(&original)).or_else(|_| std::fs::copy(&src, mods.join(&original)).map(|_| ())).map_err(|e| e.to_string())?;
+    log(&dir, "restored", &ev.name, &original);
+    Ok(original)
 }
 
 /// Красивое имя мода из имени файла: «sodium-fabric-0.6.jar» → «sodium-fabric-0.6»
@@ -87,10 +144,10 @@ pub fn detect_external(inst_dir: &Path) {
     }
     let t = now();
     for f in now_set.difference(&before) {
-        append(inst_dir, &Event { time: t, action: "appeared".into(), name: pretty(f), detail: f.clone() });
+        append(inst_dir, &Event { time: t, action: "appeared".into(), name: pretty(f), detail: f.clone(), restore: String::new(), replaced: String::new() });
     }
     for f in before.difference(&now_set) {
-        append(inst_dir, &Event { time: t, action: "vanished".into(), name: pretty(f), detail: f.clone() });
+        append(inst_dir, &Event { time: t, action: "vanished".into(), name: pretty(f), detail: f.clone(), restore: String::new(), replaced: String::new() });
     }
     sync(inst_dir);
 }

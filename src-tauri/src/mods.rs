@@ -25,9 +25,13 @@ pub struct ModInfo {
     pub added: u64,
     /// Проект на Modrinth, если мод ставили оттуда
     pub project_id: String,
+    /// Для какого загрузчика сделан мод: fabric | quilt | neoforge | forge | legacy
+    pub kind: String,
+    /// id мода внутри файла (чтобы находить дубликаты)
+    pub mod_id: String,
 }
 
-fn mods_dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
+pub fn mods_dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     let dir = instances::dir(app, id)?.join("minecraft").join("mods");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
@@ -95,8 +99,12 @@ pub fn delete_mod(app: AppHandle, id: String, file: String) -> Result<(), String
     let dir = mods_dir(&app, &id)?;
     let path = safe_file(&dir, &file)?;
     let name = read_metadata(&path).name;
-    std::fs::remove_file(&path).map_err(|e| format!("не получилось удалить мод: {e}"))?;
-    history::log(&instances::dir(&app, &id)?, "removed", if name.is_empty() { &file } else { &name }, &file);
+    let inst_dir = instances::dir(&app, &id)?;
+    let stash = history::stash(&inst_dir, &path);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("не получилось удалить мод: {e}"))?;
+    }
+    history::log_undo(&inst_dir, "removed", if name.is_empty() { &file } else { &name }, &file, &stash.unwrap_or_default(), "");
     Ok(())
 }
 
@@ -121,7 +129,7 @@ pub fn add_mods(app: AppHandle, id: String, paths: Vec<String>) -> Result<usize,
 
 // ---------- Чтение информации о моде из .jar ----------
 
-fn read_metadata(path: &Path) -> ModInfo {
+pub fn read_metadata(path: &Path) -> ModInfo {
     let mut info = ModInfo::default();
     let Ok(file) = std::fs::File::open(path) else { return info };
     let Ok(mut zip) = zip::ZipArchive::new(file) else { return info };
@@ -139,6 +147,8 @@ fn read_metadata(path: &Path) -> ModInfo {
             info.version = j["version"].as_str().unwrap_or_default().to_string();
             info.description = j["description"].as_str().unwrap_or_default().to_string();
             info.authors = people(&j["authors"]);
+            info.kind = "fabric".into();
+            info.mod_id = j["id"].as_str().unwrap_or_default().to_string();
             return info;
         }
     }
@@ -149,13 +159,19 @@ fn read_metadata(path: &Path) -> ModInfo {
             info.name = l["metadata"]["name"].as_str().or(l["id"].as_str()).unwrap_or_default().to_string();
             info.version = l["version"].as_str().unwrap_or_default().to_string();
             info.description = l["metadata"]["description"].as_str().unwrap_or_default().to_string();
+            info.kind = "quilt".into();
+            info.mod_id = l["id"].as_str().unwrap_or_default().to_string();
             return info;
         }
     }
     // NeoForge / Forge (1.13+)
     let manifest_version = read("META-INF/MANIFEST.MF")
         .and_then(|m| m.lines().find_map(|l| l.strip_prefix("Implementation-Version:").map(|v| v.trim().to_string())));
-    if let Some(text) = read("META-INF/neoforge.mods.toml").or_else(|| read("META-INF/mods.toml")) {
+    let neo = read("META-INF/neoforge.mods.toml");
+    let is_neo = neo.is_some();
+    if let Some(text) = neo.or_else(|| read("META-INF/mods.toml")) {
+        info.kind = if is_neo { "neoforge" } else { "forge" }.into();
+        info.mod_id = toml_value(&text, "modId").unwrap_or_default();
         info.name = toml_value(&text, "displayName").unwrap_or_default();
         info.version = toml_value(&text, "version").unwrap_or_default();
         if info.version.contains("${") {
@@ -173,6 +189,8 @@ fn read_metadata(path: &Path) -> ModInfo {
             info.version = m["version"].as_str().unwrap_or_default().to_string();
             info.description = m["description"].as_str().unwrap_or_default().to_string();
             info.authors = people(&m["authorList"]);
+            info.kind = "legacy".into();
+            info.mod_id = m["modid"].as_str().unwrap_or_default().to_string();
         }
     }
     info

@@ -348,6 +348,7 @@ pub async fn apply_mod_updates(app: AppHandle, id: String, updates: Vec<ModUpdat
         let tmp: PathBuf = mods.join(format!("{}.download", u.filename));
         net::download(&u.url, &tmp, if u.sha1.is_empty() { None } else { Some(u.sha1.as_str()) }).await?;
         let old_entry = index.remove(&index_key("mods", &u.file));
+        let stash = history::stash(&dir, &mods.join(&u.file)).unwrap_or_default();
         let _ = std::fs::remove_file(mods.join(&u.file));
         std::fs::rename(&tmp, mods.join(&new_name)).map_err(|e| e.to_string())?;
         index.insert(
@@ -359,7 +360,7 @@ pub async fn apply_mod_updates(app: AppHandle, id: String, updates: Vec<ModUpdat
             },
         );
         let title = old_entry.map(|e| e.title).filter(|t| !t.is_empty()).unwrap_or(u.name.clone());
-        history::log(&dir, "updated", &title, &format!("{} → {}", u.current, u.latest));
+        history::log_undo(&dir, "updated", &title, &format!("{} → {}", u.current, u.latest), &stash, &new_name);
         done += 1;
     }
     write_index(&dir, &index)?;
@@ -377,15 +378,21 @@ pub fn remove_project(app: AppHandle, id: String, project_id: String) -> Result<
     for key in keys {
         let Some(rel) = Path::new(&key).components().all(|c| matches!(c, std::path::Component::Normal(_))).then(|| game.join(&key)) else { continue };
         let mut gone = false;
+        let mut stash = String::new();
         for path in [rel.clone(), PathBuf::from(format!("{}.disabled", rel.to_string_lossy()))] {
-            if path.is_file() && std::fs::remove_file(&path).is_ok() {
-                gone = true;
+            if path.is_file() {
+                if key.starts_with("mods/") {
+                    stash = history::stash(&dir, &path).unwrap_or_default();
+                }
+                if std::fs::remove_file(&path).is_ok() {
+                    gone = true;
+                }
             }
         }
         let entry = index.remove(&key).unwrap_or_default();
         let title = if entry.title.is_empty() { history::pretty(key.rsplit('/').next().unwrap_or(&key)) } else { entry.title };
         if gone {
-            history::log(&dir, "removed", &title, &key);
+            history::log_undo(&dir, "removed", &title, &key, &stash, "");
             removed.push(title);
         }
     }

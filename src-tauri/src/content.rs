@@ -186,7 +186,7 @@ fn set_cover(app: &AppHandle, id: &str, src: &Path) -> Result<instances::Instanc
 pub async fn pick_cover(app: AppHandle, id: String) -> Result<Option<instances::Instance>, String> {
     let dialog_app = app.clone();
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        dialog_app.dialog().file().add_filter("Картинки", &["png", "jpg", "jpeg", "webp", "gif"]).blocking_pick_file()
+        dialog_app.dialog().file().add_filter("Картинки и видео", &["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm"]).blocking_pick_file()
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -386,7 +386,7 @@ pub fn restore_backup(app: AppHandle, id: String, file: String) -> Result<String
 pub async fn pick_background(app: AppHandle) -> Result<Option<String>, String> {
     let dialog_app = app.clone();
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        dialog_app.dialog().file().add_filter("Картинки", &["png", "jpg", "jpeg", "webp", "gif"]).blocking_pick_file()
+        dialog_app.dialog().file().add_filter("Картинки и видео", &["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm"]).blocking_pick_file()
     })
     .await
     .map_err(|e| e.to_string())?;

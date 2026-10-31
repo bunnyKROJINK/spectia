@@ -25,6 +25,7 @@ mod prism;
 mod settings;
 mod skins;
 mod stats;
+mod toolbox;
 mod updater;
 mod versions;
 mod window;
@@ -93,6 +94,16 @@ pub fn run() {
             prism::import_prism,
             stats::stats_summary,
             stats::stats_sessions,
+            history::undo_event,
+            toolbox::list_snapshots,
+            toolbox::make_snapshot,
+            toolbox::delete_snapshot,
+            toolbox::restore_snapshot,
+            toolbox::list_profiles,
+            toolbox::save_profile,
+            toolbox::delete_profile,
+            toolbox::apply_profile,
+            toolbox::precheck,
             prism::find_prism_accounts,
             accounts::add_prism_account,
             history::mod_history,
