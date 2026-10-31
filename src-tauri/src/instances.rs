@@ -47,6 +47,14 @@ pub struct Instance {
     pub play_time_secs: u64,
     /// Когда запускали последний раз (секунды с 1970 года)
     pub last_played: u64,
+    /// Порядок в сборках
+    pub favorite: bool,
+    pub archived: bool,
+    pub folder: String,
+    pub tags: Vec<String>,
+    pub notes: String,
+    /// Делать копию миров после каждой игры
+    pub backup_worlds: bool,
 }
 
 impl Default for Instance {
@@ -74,6 +82,12 @@ impl Default for Instance {
             created_at: 0,
             play_time_secs: 0,
             last_played: 0,
+            favorite: false,
+            archived: false,
+            folder: String::new(),
+            tags: Vec::new(),
+            notes: String::new(),
+            backup_worlds: false,
         }
     }
 }
@@ -182,7 +196,14 @@ pub fn create(app: &AppHandle, data: NewInstance) -> Result<Instance, String> {
     let dir = instance_path(&app, &id)?;
     std::fs::create_dir_all(dir.join("minecraft")).map_err(|e| format!("не смогли создать папку сборки: {e}"))?;
 
+    let defaults = crate::settings::load(&app);
     let inst = Instance {
+        memory_gb: defaults.default_memory_gb.clamp(1, 32),
+        jvm_args: defaults.default_jvm_args.clone(),
+        window_width: defaults.default_window_width.max(320),
+        window_height: defaults.default_window_height.max(240),
+        fullscreen: defaults.default_fullscreen,
+        backup_worlds: defaults.default_backup_worlds,
         id,
         name: name.to_string(),
         game_version: data.game_version,

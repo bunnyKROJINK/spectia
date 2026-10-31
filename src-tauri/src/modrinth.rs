@@ -155,10 +155,34 @@ pub struct InstallResult {
 }
 
 #[tauri::command]
-pub async fn install_project(app: AppHandle, id: String, project_id: String) -> Result<InstallResult, String> {
+pub async fn install_project(app: AppHandle, id: String, project_id: String, world: Option<String>) -> Result<InstallResult, String> {
     let inst = instances::read(&app, &id)?;
     let dir = instances::dir(&app, &id)?;
+    if let Some(world) = world {
+        return install_datapack(&dir, &inst.game_version, &project_id, &world).await;
+    }
     install_into(&dir, &inst.game_version, &inst.loader, &project_id).await
+}
+
+/// Датапак ставится в папку datapacks конкретного мира
+async fn install_datapack(inst_dir: &Path, game: &str, project_id: &str, world: &str) -> Result<InstallResult, String> {
+    if world.is_empty() || world.contains(['/', '\']) || world.contains("..") {
+        return Err("неправильное имя мира".into());
+    }
+    let world_dir = inst_dir.join("minecraft").join("saves").join(world);
+    if !world_dir.join("level.dat").exists() {
+        return Err("такого мира нет".into());
+    }
+    let project: MrProject = net::fetch_json(&format!("{API}/project/{project_id}")).await?;
+    let version = compatible_version(project_id, game, &["datapack"])
+        .await?
+        .ok_or_else(|| format!("NO_COMPATIBLE_VERSION:{}", project.title))?;
+    let file = version.primary_file().ok_or("у этой версии нет файла")?;
+    if file.filename.contains(['/', '\']) || file.filename.contains("..") {
+        return Err("странное имя файла".into());
+    }
+    net::download(&file.url, &world_dir.join("datapacks").join(&file.filename), file.hashes.get("sha1").map(String::as_str)).await?;
+    Ok(InstallResult { installed: vec![project.title] })
 }
 
 /// Ставит проект и все обязательные зависимости в папку сборки.

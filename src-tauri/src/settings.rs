@@ -18,6 +18,20 @@ pub struct Settings {
     pub auto_java: bool,
     /// Свой ключ CurseForge API (необязательно).
     pub curseforge_key: String,
+    /// После закрытия игры: "restore" — вернуть лаунчер, "stay" — оставить свёрнутым
+    pub after_game_close: String,
+    /// Значения по умолчанию для новых сборок
+    pub default_memory_gb: u8,
+    pub default_jvm_args: String,
+    pub default_window_width: u32,
+    pub default_window_height: u32,
+    pub default_fullscreen: bool,
+    pub default_backup_worlds: bool,
+    /// Сколько копий каждого мира хранить
+    pub backup_keep: u32,
+    /// Всё остальное, что хранит интерфейс (цвета, масштаб, звуки, свои темы…)
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for Settings {
@@ -31,6 +45,15 @@ impl Default for Settings {
             check_updates: true,
             auto_java: true,
             curseforge_key: String::new(),
+            after_game_close: "restore".into(),
+            default_memory_gb: 4,
+            default_jvm_args: String::new(),
+            default_window_width: 1280,
+            default_window_height: 720,
+            default_fullscreen: false,
+            default_backup_worlds: false,
+            backup_keep: 5,
+            extra: serde_json::Map::new(),
         }
     }
 }

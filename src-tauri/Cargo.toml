@@ -1,6 +1,6 @@
 [package]
 name = "spectia"
-version = "0.4.1"
+version = "0.5.0"
 description = "Spectia — красивый лаунчер для Minecraft"
 authors = ["bunnyKROJINK"]
 license = "GPL-3.0-only"
@@ -22,8 +22,11 @@ tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 futures-util = "0.3"
+sha2 = "0.10"
+base64 = "0.22"
+tauri-plugin-notification = "2"
 tokio = { version = "1", features = ["time"] }
 sha1_smol = "1"
 uuid = { version = "1", features = ["v4"] }

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::{accounts, game, instances, java, loaders, net, paths, settings};
+use crate::{accounts, content, game, instances, java, loaders, net, paths, settings, stats};
 
 const AUTHLIB_INJECTOR_URL: &str = "https://authlib-injector.yushi.moe/artifact/latest.json";
 
@@ -163,7 +163,11 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
 
     // Следим за игрой в отдельном потоке, чтобы лаунчер не «замирал».
     let post = inst.post_exit_command.clone();
-    let hide = settings.hide_on_launch;
+    let hide = settings.hide_on_launch && settings.after_game_close != "stay";
+    let backup = inst.backup_worlds;
+    let keep = settings.backup_keep;
+    let session_start = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let (inst_name, inst_version, inst_loader) = (inst.name.clone(), inst.game_version.clone(), inst.loader.clone());
     std::thread::spawn(move || {
         let started = Instant::now();
         let code = loop {
@@ -176,7 +180,17 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
         if let Ok(mut map) = app.state::<Running>().0.lock() {
             map.remove(&id);
         }
-        instances::add_play_time(&app, &id, started.elapsed().as_secs());
+        let seconds = started.elapsed().as_secs();
+        instances::add_play_time(&app, &id, seconds);
+        stats::record(
+            &app,
+            &stats::Session { instance: id.clone(), name: inst_name, game_version: inst_version, loader: inst_loader, start: session_start, seconds },
+        );
+        if backup {
+            let _ = app.emit("backup-state", json!({ "instanceId": id, "running": true }));
+            content::backup_after_game(&app, &id, session_start, keep);
+            let _ = app.emit("backup-state", json!({ "instanceId": id, "running": false }));
+        }
         if !post.trim().is_empty() {
             let _ = shell(&post, &game_dir, &inst_env, &env).status();
         }
@@ -228,7 +242,7 @@ fn build_args(c: &Ctx) -> Vec<String> {
     vars.insert("auth_session", format!("token:{}:{}", account.access_token, account.id));
     vars.insert("auth_xuid", "0".into());
     vars.insert("clientid", "0".into());
-    vars.insert("user_type", "mojang".into());
+    vars.insert("user_type", if account.kind == "microsoft" { "msa" } else { "mojang" }.into());
     vars.insert("user_properties", "{}".into());
     vars.insert("version_name", version.id.clone());
     vars.insert("version_type", "Spectia".into());
@@ -446,6 +460,8 @@ mod tests {
                 name: "SpectiaTest".into(),
                 kind: "test".into(),
                 access_token: "0".into(),
+                refresh_token: String::new(),
+                expires_at: 0,
             };
             let args = build_args(&Ctx {
                 version: &version,

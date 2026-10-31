@@ -212,3 +212,216 @@ pub fn clear_cover(app: AppHandle, id: String) -> Result<instances::Instance, St
     instances::write_instance(&dir, &inst)?;
     Ok(inst)
 }
+
+// ---------- Датапаки мира ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Datapack {
+    pub file: String,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub fn list_datapacks(app: AppHandle, id: String, world: String) -> Result<Vec<Datapack>, String> {
+    let dir = instances::dir(&app, &id)?.join("minecraft").join("saves").join(plain(&world)?).join("datapacks");
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let path = e.path();
+            out.push(Datapack {
+                file: e.file_name().to_string_lossy().into_owned(),
+                size: if path.is_dir() { dir_size(&path) } else { e.metadata().map(|m| m.len()).unwrap_or(0) },
+            });
+        }
+    }
+    out.sort_by(|a, b| a.file.to_lowercase().cmp(&b.file.to_lowercase()));
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn delete_datapack(app: AppHandle, id: String, world: String, file: String) -> Result<(), String> {
+    let path = instances::dir(&app, &id)?.join("minecraft").join("saves").join(plain(&world)?).join("datapacks").join(plain(&file)?);
+    let result = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+    result.map_err(|e| format!("не получилось удалить датапак: {e}"))
+}
+
+// ---------- Резервные копии миров ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Backup {
+    pub file: String,
+    pub world: String,
+    pub time: u64,
+    pub size: u64,
+}
+
+fn backups_dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
+    let dir = instances::dir(app, id)?.join("backups");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn zip_dir(zip: &mut zip::ZipWriter<std::fs::File>, dir: &Path, prefix: &str, opts: zip::write::SimpleFileOptions) -> Result<(), String> {
+    use std::io::Write;
+    for e in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+        let name = format!("{prefix}/{}", e.file_name().to_string_lossy());
+        let path = e.path();
+        if path.is_dir() {
+            zip_dir(zip, &path, &name, opts)?;
+        } else if e.file_name() != "session.lock" {
+            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+            zip.start_file(name, opts).map_err(|e| e.to_string())?;
+            zip.write_all(&bytes).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Копия одного мира в архив: backups/<мир>__<время>.zip. Старые копии сверх лимита удаляются.
+pub fn backup_world(app: &AppHandle, id: &str, world: &str, keep: u32) -> Result<String, String> {
+    let saves = instances::dir(app, id)?.join("minecraft").join("saves");
+    let src = saves.join(plain(world)?);
+    let dir = backups_dir(app, id)?;
+    let file = format!("{world}__{}.zip", instances::now_secs());
+    let out = std::fs::File::create(dir.join(&file)).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(out);
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    zip_dir(&mut zip, &src, world, opts)?;
+    zip.finish().map_err(|e| e.to_string())?;
+
+    // Оставляем только последние `keep` копий этого мира
+    let mut mine: Vec<Backup> = list_backups_in(&dir).into_iter().filter(|b| b.world == world).collect();
+    mine.sort_by(|a, b| b.time.cmp(&a.time));
+    for old in mine.iter().skip(keep.max(1) as usize) {
+        let _ = std::fs::remove_file(dir.join(&old.file));
+    }
+    Ok(file)
+}
+
+/// После игры: копируем миры, в которые заходили во время этой сессии.
+pub fn backup_after_game(app: &AppHandle, id: &str, since: u64, keep: u32) {
+    let Ok(dir) = instances::dir(app, id) else { return };
+    let Ok(rd) = std::fs::read_dir(dir.join("minecraft").join("saves")) else { return };
+    for e in rd.flatten() {
+        let level = e.path().join("level.dat");
+        if level.exists() && mtime(&level) >= since {
+            let _ = backup_world(app, id, &e.file_name().to_string_lossy(), keep);
+        }
+    }
+}
+
+fn list_backups_in(dir: &Path) -> Vec<Backup> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let file = e.file_name().to_string_lossy().into_owned();
+            let Some(stem) = file.strip_suffix(".zip") else { continue };
+            let Some((world, time)) = stem.rsplit_once("__") else { continue };
+            out.push(Backup {
+                world: world.to_string(),
+                time: time.parse().unwrap_or(0),
+                size: e.metadata().map(|m| m.len()).unwrap_or(0),
+                file,
+            });
+        }
+    }
+    out.sort_by(|a, b| b.time.cmp(&a.time));
+    out
+}
+
+#[tauri::command]
+pub fn list_backups(app: AppHandle, id: String) -> Result<Vec<Backup>, String> {
+    Ok(list_backups_in(&backups_dir(&app, &id)?))
+}
+
+#[tauri::command]
+pub fn make_backup(app: AppHandle, id: String, world: String) -> Result<String, String> {
+    let keep = crate::settings::load(&app).backup_keep;
+    backup_world(&app, &id, &world, keep)
+}
+
+#[tauri::command]
+pub fn delete_backup(app: AppHandle, id: String, file: String) -> Result<(), String> {
+    std::fs::remove_file(backups_dir(&app, &id)?.join(plain(&file)?)).map_err(|e| e.to_string())
+}
+
+/// Восстановить мир из копии. Текущее состояние мира сначала тоже сохраняется в копию.
+#[tauri::command]
+pub fn restore_backup(app: AppHandle, id: String, file: String) -> Result<String, String> {
+    use std::io::Read;
+    let dir = backups_dir(&app, &id)?;
+    let backup = list_backups_in(&dir).into_iter().find(|b| b.file == file).ok_or("копия не найдена")?;
+    let saves = instances::dir(&app, &id)?.join("minecraft").join("saves");
+    let target = saves.join(plain(&backup.world)?);
+    if target.exists() {
+        let keep = crate::settings::load(&app).backup_keep + 1;
+        backup_world(&app, &id, &backup.world, keep)?;
+        std::fs::remove_dir_all(&target).map_err(|e| format!("мир сейчас открыт в игре? {e}"))?;
+    }
+    let f = std::fs::File::open(dir.join(plain(&file)?)).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(f).map_err(|e| e.to_string())?;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        let Some(rel) = entry.enclosed_name() else { continue };
+        if entry.is_dir() {
+            continue;
+        }
+        let out = saves.join(rel);
+        if let Some(p) = out.parent() {
+            std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+        }
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        std::fs::write(out, buf).map_err(|e| e.to_string())?;
+    }
+    Ok(backup.world)
+}
+
+// ---------- Фон лаунчера и темы ----------
+
+/// Выбрать картинку для фона лаунчера. Возвращает полный путь к её копии.
+#[tauri::command]
+pub async fn pick_background(app: AppHandle) -> Result<Option<String>, String> {
+    let dialog_app = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        dialog_app.dialog().file().add_filter("Картинки", &["png", "jpg", "jpeg", "webp", "gif"]).blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(picked) = picked else { return Ok(None) };
+    let src: PathBuf = picked.into_path().map_err(|e| e.to_string())?;
+    let ext = src.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "png".into());
+    let dir = paths::data_dir(&app)?.join("backgrounds");
+    // Старые фоны больше не нужны
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dst = dir.join(format!("bg-{}.{ext}", instances::now_secs()));
+    std::fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+    Ok(Some(dst.to_string_lossy().into_owned()))
+}
+
+/// Сохранить свою тему в файл, чтобы поделиться
+#[tauri::command]
+pub async fn export_theme(app: AppHandle, name: String, json: String) -> Result<Option<String>, String> {
+    let dialog_app = app.clone();
+    let file_name = format!("{}.spectia-theme.json", name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
+    let target = tauri::async_runtime::spawn_blocking(move || {
+        dialog_app.dialog().file().set_file_name(&file_name).add_filter("Тема Spectia", &["json"]).blocking_save_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(target) = target else { return Ok(None) };
+    let path = target.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+// ---------- Уведомления Windows ----------
+
+#[tauri::command]
+pub fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+}

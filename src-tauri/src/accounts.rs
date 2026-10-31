@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use crate::{net, paths};
+use crate::{microsoft, net, paths};
 
 const ELY_AUTH: &str = "https://authserver.ely.by/auth";
 
@@ -20,6 +20,12 @@ pub struct Account {
     pub kind: String,
     #[serde(default)]
     pub access_token: String,
+    /// Только у Microsoft: чтобы входить заново без браузера
+    #[serde(default)]
+    pub refresh_token: String,
+    /// Когда истекает access_token (секунды с 1970 года)
+    #[serde(default)]
+    pub expires_at: u64,
 }
 
 /// То, что видит интерфейс: без токена.
@@ -34,13 +40,13 @@ pub struct AccountInfo {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-struct Store {
-    client_token: String,
-    active: String,
-    accounts: Vec<Account>,
+pub(crate) struct Store {
+    pub client_token: String,
+    pub active: String,
+    pub accounts: Vec<Account>,
 }
 
-fn load(app: &AppHandle) -> Result<Store, String> {
+pub(crate) fn load(app: &AppHandle) -> Result<Store, String> {
     let file = paths::data_dir(app)?.join("accounts.json");
     let mut store: Store = std::fs::read_to_string(&file)
         .ok()
@@ -52,7 +58,7 @@ fn load(app: &AppHandle) -> Result<Store, String> {
     Ok(store)
 }
 
-fn save(app: &AppHandle, store: &Store) -> Result<(), String> {
+pub(crate) fn save(app: &AppHandle, store: &Store) -> Result<(), String> {
     let file = paths::data_dir(app)?.join("accounts.json");
     let text = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
     std::fs::write(file, text).map_err(|e| format!("не смогли сохранить аккаунты: {e}"))
@@ -144,10 +150,59 @@ pub async fn add_ely_account(app: AppHandle, username: String, password: String,
     let profile = res.selected_profile.ok_or("У этого аккаунта Ely.by нет игрового профиля")?;
 
     store.accounts.retain(|a| a.id != profile.id);
-    store.accounts.push(Account { id: profile.id.clone(), name: profile.name, kind: "ely".into(), access_token: res.access_token });
+    store.accounts.push(Account {
+        id: profile.id.clone(),
+        name: profile.name,
+        kind: "ely".into(),
+        access_token: res.access_token,
+        refresh_token: String::new(),
+        expires_at: 0,
+    });
     store.active = profile.id;
     save(&app, &store)?;
     Ok(info(&store))
+}
+
+/// Готов ли вход через Microsoft (Mojang одобрил приложение и в сборке есть Client ID)
+#[tauri::command]
+pub fn microsoft_ready() -> bool {
+    microsoft::configured()
+}
+
+/// Вход через Microsoft: откроется браузер
+#[tauri::command]
+pub async fn add_microsoft_account(app: AppHandle) -> Result<Vec<AccountInfo>, String> {
+    let login = microsoft::login(&app).await?;
+    let mut store = load(&app)?;
+    store.accounts.retain(|a| a.id != login.id);
+    store.accounts.push(Account {
+        id: login.id.clone(),
+        name: login.name,
+        kind: "microsoft".into(),
+        access_token: login.access_token,
+        refresh_token: login.refresh_token,
+        expires_at: login.expires_at,
+    });
+    store.active = login.id;
+    save(&app, &store)?;
+    Ok(info(&store))
+}
+
+/// Свежий токен Microsoft-аккаунта (обновляет, если старый скоро истечёт)
+pub async fn fresh_microsoft(app: &AppHandle, id: &str) -> Result<Account, String> {
+    let mut store = load(app)?;
+    let idx = store.accounts.iter().position(|a| a.id == id && a.kind == "microsoft").ok_or("NO_ACCOUNT")?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if store.accounts[idx].expires_at <= now + 300 {
+        let login = microsoft::refresh(&store.accounts[idx].refresh_token).await?;
+        let acc = &mut store.accounts[idx];
+        acc.access_token = login.access_token;
+        acc.refresh_token = login.refresh_token;
+        acc.expires_at = login.expires_at;
+        acc.name = login.name;
+        save(app, &store)?;
+    }
+    Ok(store.accounts[idx].clone())
 }
 
 #[tauri::command]
@@ -163,7 +218,7 @@ pub fn set_active_account(app: AppHandle, id: String) -> Result<Vec<AccountInfo>
 #[tauri::command]
 pub async fn remove_account(app: AppHandle, id: String) -> Result<Vec<AccountInfo>, String> {
     let mut store = load(&app)?;
-    if let Some(acc) = store.accounts.iter().find(|a| a.id == id) {
+    if let Some(acc) = store.accounts.iter().find(|a| a.id == id && a.kind == "ely") {
         // Вежливо «выходим» на стороне Ely.by. Если не получилось — не страшно.
         let _ = net::client()
             .post(format!("{ELY_AUTH}/invalidate"))
@@ -204,6 +259,15 @@ pub async fn active_for_launch(app: &AppHandle) -> Result<Account, String> {
             Err(e) if e.starts_with("NETWORK") => {}
             Err(_) => return Err("ELY_RELOGIN".into()),
         }
+    }
+    if acc.kind == "microsoft" {
+        return match fresh_microsoft(app, &acc.id).await {
+            Ok(a) => Ok(a),
+            // Нет интернета — пробуем со старым токеном
+            Err(e) if e.starts_with("NETWORK") => Ok(acc),
+            Err(e) if e == "MS_NOT_CONFIGURED" => Err(e),
+            Err(_) => Err("MS_RELOGIN".into()),
+        };
     }
     Ok(store.accounts[idx].clone())
 }
