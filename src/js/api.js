@@ -140,6 +140,7 @@ export function openUrl(url) {
 // ---------- Заглушка для браузера ----------
 
 const mockListeners = {};
+let mockNetBytes = 0;
 const emit = (event, payload) => (mockListeners[event] || []).forEach((h) => h(payload));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -405,12 +406,21 @@ async function mockInvoke(cmd, args = {}) {
       const inst = store.get('instances', []).find((i) => i.id === args.id);
       if (!accountInfo().some((a) => a.active)) throw 'NO_ACCOUNT';
       if (inst?.loader !== 'vanilla') throw 'LOADER_NOT_YET';
+      // Изображаем скачивание: скорость «гуляет», как в жизни
+      let bytes = mockNetBytes; let active = 8;
+      const tick = setInterval(() => {
+        const sp = active ? Math.round((6 + Math.random() * 9) * 1024 * 1024) : 0;
+        bytes += sp / 2; mockNetBytes = bytes;
+        emit('net-stats', { bytes, speed: sp, active });
+      }, 500);
       for (const [stage, total] of [['account', 1], ['version', 1], ['java', 40], ['libraries', 60], ['assets', 120], ['starting', 1]]) {
-        for (let n = 0; n <= total; n += Math.ceil(total / 6)) {
+        for (let n = 0; n <= total; n += Math.ceil(total / 12)) {
           emit('launch-progress', { instanceId: args.id, stage, done: Math.min(n, total), total });
-          await sleep(90);
+          await sleep(stage === 'account' || stage === 'version' ? 60 : 260);
         }
       }
+      active = 0;
+      setTimeout(() => clearInterval(tick), 1600);
       mockRunning.add(args.id);
       emit('game-state', { instanceId: args.id, running: true });
       return null;

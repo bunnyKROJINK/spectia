@@ -20,7 +20,6 @@ const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manif
 const RESOURCES_URL: &str = "https://resources.download.minecraft.net";
 const LIBRARIES_URL: &str = "https://libraries.minecraft.net";
 /// Сколько файлов качать одновременно
-const PARALLEL: usize = 16;
 
 // ---------- Описание версии ----------
 
@@ -336,7 +335,7 @@ async fn run_jobs(jobs: Vec<Job>, progress: &Progress, stage: &str) -> Result<()
                 r
             }
         })
-        .buffer_unordered(PARALLEL)
+        .buffer_unordered(net::parallel())
         .collect()
         .await;
     results.into_iter().collect()

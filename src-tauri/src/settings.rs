@@ -74,6 +74,7 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
 
 #[tauri::command]
 pub fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+    crate::net::set_speed(settings.extra.get("downloadSpeed").and_then(|v| v.as_str()).unwrap_or("normal"));
     let file = paths::settings_file(&app)?;
     let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     std::fs::write(&file, text).map_err(|e| format!("не смогли сохранить настройки: {e}"))

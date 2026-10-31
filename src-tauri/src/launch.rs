@@ -65,6 +65,7 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
 
     let mut inst = instances::read(&app, &id)?;
     let settings = settings::load(&app);
+    net::set_speed(settings.extra.get("downloadSpeed").and_then(|v| v.as_str()).unwrap_or("normal"));
     let account = accounts::active_for_launch(&app).await?;
 
     let data = paths::data_dir(&app)?;
@@ -81,7 +82,7 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
         PathBuf::from(inst.java_path.trim())
     } else if settings.auto_java {
         let component = vanilla.java_version.as_ref().map(|j| j.component.clone()).unwrap_or_else(|| "jre-legacy".into());
-        java::ensure(&data, &component, &progress).await?
+        java::ensure(&data, &component, vanilla.java_version.as_ref().map(|j| j.major_version), &progress).await?
     } else {
         PathBuf::from(if cfg!(windows) { "javaw" } else { "java" })
     };
@@ -496,7 +497,7 @@ mod tests {
             let progress = Progress::silent();
             let vanilla = game::load_version(&data, game_version).await.expect("описание версии");
             let component = vanilla.java_version.as_ref().map(|j| j.component.clone()).unwrap_or_else(|| "jre-legacy".into());
-            let java = java::ensure(&data, &component, &progress).await.expect("Java");
+            let java = java::ensure(&data, &component, vanilla.java_version.as_ref().map(|j| j.major_version), &progress).await.expect("Java");
             let version = if loader == "vanilla" {
                 vanilla
             } else {

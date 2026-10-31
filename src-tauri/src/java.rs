@@ -83,10 +83,22 @@ struct RawDownload {
 
 /// Возвращает путь к Java для нужного «компонента» (например, java-runtime-delta),
 /// при необходимости скачивая её.
-pub async fn ensure(data: &Path, component: &str, progress: &Progress) -> Result<PathBuf, String> {
+pub async fn ensure(data: &Path, component: &str, major: Option<u32>, progress: &Progress) -> Result<PathBuf, String> {
     let home = data.join("runtime").join(component);
     let marker = home.join(".spectia-version");
     let exe = java_exe(&home);
+
+    // Java уже скачана раньше — запускаем сразу, не спрашивая Mojang каждый раз.
+    if exe.exists() && marker.exists() {
+        return Ok(exe);
+    }
+    // Подходящая Java уже стоит на компьютере (от Prism, ElyPrism или установленная вручную) —
+    // берём её и ничего не качаем.
+    if let Some(major) = major {
+        if let Some(found) = find_installed(major) {
+            return Ok(found);
+        }
+    }
 
     let all: HashMap<String, HashMap<String, Vec<RuntimeEntry>>> = match net::fetch_json(RUNTIMES_URL).await {
         Ok(all) => all,
@@ -146,13 +158,13 @@ pub async fn ensure(data: &Path, component: &str, progress: &Progress) -> Result
                 #[cfg(not(unix))]
                 let _ = executable;
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                if n % 10 == 0 || n == total {
+                if n % 2 == 0 || n == total {
                     progress.stage("java", n, total);
                 }
                 Ok(())
             }
         })
-        .buffer_unordered(16)
+        .buffer_unordered(net::parallel())
         .collect()
         .await;
     results.into_iter().collect::<Result<Vec<()>, String>>()?;
@@ -162,4 +174,146 @@ pub async fn ensure(data: &Path, component: &str, progress: &Progress) -> Result
         return Err("Java скачалась, но запускаемый файл не найден".into());
     }
     Ok(exe)
+}
+
+// ---------- Поиск уже установленной Java ----------
+
+/// Главная версия Java из файла `release` (JAVA_VERSION="17.0.8" → 17, "1.8.0_392" → 8)
+fn release_major(home: &Path) -> Option<(u32, String)> {
+    let text = std::fs::read_to_string(home.join("release")).ok()?;
+    let mut version = None;
+    let mut arch = String::new();
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("JAVA_VERSION=") {
+            version = Some(v.trim().trim_matches('"').to_string());
+        } else if let Some(a) = line.strip_prefix("OS_ARCH=") {
+            arch = a.trim().trim_matches('"').to_lowercase();
+        }
+    }
+    let version = version?;
+    let mut parts = version.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty());
+    let first: u32 = parts.next()?.parse().ok()?;
+    let major = if first == 1 { parts.next()?.parse().ok()? } else { first };
+    Some((major, arch))
+}
+
+fn arch_ok(arch: &str) -> bool {
+    if arch.is_empty() {
+        return true;
+    }
+    let want_64 = cfg!(target_pointer_width = "64");
+    let is_32 = matches!(arch, "x86" | "i386" | "i586" | "i686");
+    let is_arm = arch.contains("aarch64") || arch.contains("arm");
+    if is_arm != cfg!(target_arch = "aarch64") {
+        return false;
+    }
+    !(want_64 && is_32)
+}
+
+fn plain_exe(home: &Path) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        home.join("bin").join("javaw.exe")
+    } else {
+        home.join("bin").join("java")
+    }
+}
+
+/// Папки, где обычно лежит Java: Prism / ElyPrism, JAVA_HOME, стандартные установщики.
+fn search_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    let home = env("HOME").or_else(|| env("USERPROFILE"));
+    let cfg_dir = env("APPDATA").or_else(|| home.as_ref().map(|h| h.join(".local/share")));
+    if let Some(cfg) = cfg_dir {
+        for name in ["PrismLauncher", "ElyPrismLauncher", "ElyPrism", "PolyMC", "MultiMC"] {
+            roots.push(cfg.join(name).join("java"));
+        }
+    }
+    if let Some(local) = env("LOCALAPPDATA") {
+        for name in ["PrismLauncher", "ElyPrismLauncher"] {
+            roots.push(local.join(name).join("java"));
+        }
+    }
+    if let Some(home) = home {
+        roots.push(home.join(".jdks"));
+    }
+    if cfg!(target_os = "windows") {
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            for v in ["Eclipse Adoptium", "Java", "Zulu", "Microsoft", "BellSoft", "Amazon Corretto"] {
+                roots.push(Path::new(&pf).join(v));
+            }
+        }
+    } else {
+        roots.push(PathBuf::from("/usr/lib/jvm"));
+        roots.push(PathBuf::from("/Library/Java/JavaVirtualMachines"));
+    }
+    roots
+}
+
+fn scan(dir: &Path, depth: u32, major: u32, out: &mut Option<PathBuf>) {
+    if out.is_some() || depth > 3 {
+        return;
+    }
+    if let Some((m, arch)) = release_major(dir) {
+        let exe = plain_exe(dir);
+        if m == major && arch_ok(&arch) && exe.exists() {
+            *out = Some(exe);
+        }
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            scan(&p, depth + 1, major, out);
+            if out.is_some() {
+                return;
+            }
+        }
+    }
+}
+
+pub fn find_installed(major: u32) -> Option<PathBuf> {
+    if let Ok(jh) = std::env::var("JAVA_HOME") {
+        let jh = PathBuf::from(jh);
+        if let Some((m, arch)) = release_major(&jh) {
+            if m == major && arch_ok(&arch) && plain_exe(&jh).exists() {
+                return Some(plain_exe(&jh));
+            }
+        }
+    }
+    let mut found = None;
+    for root in search_roots() {
+        if root.is_dir() {
+            scan(&root, 0, major, &mut found);
+            if found.is_some() {
+                break;
+            }
+        }
+    }
+    found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_java_major_from_release() {
+        let dir = std::env::temp_dir().join(format!("spectia-java-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("release"), "IMPLEMENTOR=\"Eclipse Adoptium\"\nJAVA_VERSION=\"17.0.8\"\nOS_ARCH=\"x86_64\"\n").unwrap();
+        assert_eq!(release_major(&dir).map(|r| r.0), Some(17));
+        std::fs::write(dir.join("release"), "JAVA_VERSION=\"1.8.0_392\"\n").unwrap();
+        assert_eq!(release_major(&dir).map(|r| r.0), Some(8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn speed_modes() {
+        crate::net::set_speed("turbo");
+        assert_eq!(crate::net::parallel(), 64);
+        crate::net::set_speed("normal");
+        assert_eq!(crate::net::parallel(), 16);
+    }
 }

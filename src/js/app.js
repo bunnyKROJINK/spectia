@@ -19,8 +19,9 @@ import { searchModrinth, CATEGORIES, projectDetails, trending } from './modrinth
 import { diagnose, crashDescription, lineLevel } from './doctor.js';
 import { ACHIEVEMENTS, SEASONAL, PERFECT, TIERS, artSvg, facts, newlyUnlocked, wrappedYear, wrappedData, find as findAch, tierOf } from './achievements.js';
 import { matchScore } from './search.js';
+import { initDownloads, onNetStats, onLaunchProgress, finish as finishDownload, dlButtonHtml, toggleDownloads, clearDownloads } from './downloads.js';
 
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.9.0';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
@@ -297,7 +298,8 @@ function progressBar(id) {
       ${counted ? `<span>${pct}%</span>` : ''}
     </div>
     <div class="bar"><span style="width:${counted ? pct : 100}%" class="${counted ? '' : 'indeterminate'}"></span></div>
-    ${p.stage === 'assets' || p.stage === 'java' ? `<span class="small" style="opacity:.8">${esc(t('launch.firstTime'))}</span>` : ''}
+    ${p.stage === 'assets' ? `<span class="small" style="opacity:.8">${esc(t('launch.firstTime'))}</span>` : ''}
+    ${p.stage === 'java' ? `<span class="small" style="opacity:.8">${esc(t('launch.javaHint'))}</span>` : ''}
   </div>`;
 }
 
@@ -1609,6 +1611,15 @@ function setGame(s) {
       ${switchRow('toggleSetting', 'autoJava', s.autoJava, t('set.autoJava'))}
     </section>
 
+    <section class="panel pad stack" style="gap:10px">
+      <div class="stack" style="gap:2px"><h2 class="h2">${esc(t('set.speed'))}</h2><span class="note">${esc(t('set.speedSub'))}</span></div>
+      <div class="speed-pick" role="radiogroup" aria-label="${esc(t('set.speed'))}">
+        ${['normal', 'fast', 'turbo'].map((m, i) => `<button role="radio" aria-checked="${(s.downloadSpeed || 'normal') === m}" data-action="setSpeed" data-v="${m}">
+          <span class="speed-bars" aria-hidden="true">${[0, 1, 2].map((b) => `<i class="${b <= i ? 'on' : ''}"></i>`).join('')}</span>
+          <b>${esc(t('set.speed.' + m))}</b><span class="small muted">${esc(t('set.speed.' + m + 'Sub'))}</span></button>`).join('')}
+      </div>
+    </section>
+
     <section class="panel pad stack" style="gap:14px">
       <div class="stack" style="gap:2px"><h2 class="h2">${esc(t('def.title'))}</h2><span class="note">${esc(t('def.sub'))}</span></div>
       ${rangeRow({ id: 'defmem', key: 'defaultMemoryGb', label: t('is.memory'), min: 1, max: 16, step: 1, value: s.defaultMemoryGb || 4, unit: ' ' + t('unit.gb'), live: false })}
@@ -1888,6 +1899,7 @@ function renderChrome() {
     <button class="searchbox" data-action="openPalette" aria-label="${esc(t('pal.open'))}">${icon.search(14)}<span>${esc(t('pal.search'))}</span><kbd>Ctrl K</kbd></button>
     <div class="grow" data-tauri-drag-region style="align-self:stretch"></div>
     ${!showList && state.music.current ? `<div class="title-player">${playerHtml()}</div>` : ''}
+    ${dlButtonHtml()}
     ${state.settings.clock !== false ? `<span class="clock" id="clock" aria-label="${esc(t('clock.label'))}">${clockText()}</span>` : ''}
     ${titleRight}`;
 
@@ -2790,6 +2802,7 @@ async function launch(id, force = false) {
   try {
     await api.launch(id);
   } catch (e) {
+    finishDownload(id, false);
     delete state.progress[id];
     const code = String(e);
     const inst = state.instances.find((i) => i.id === id);
@@ -2806,7 +2819,9 @@ async function launch(id, force = false) {
 }
 
 function subscribe() {
+  on('net-stats', onNetStats);
   on('launch-progress', (p) => {
+    onLaunchProgress(p);
     state.progress[p.instanceId] = p;
     // Перерисовываем только полоску прогресса, если она уже на экране, — так меньше нагрузки.
     const bar = document.querySelector('.hero .launch-status');
@@ -2817,6 +2832,7 @@ function subscribe() {
     }
   });
   on('game-state', (g) => {
+    finishDownload(g.instanceId, true);
     delete state.progress[g.instanceId];
     if (g.running) {
       state.running.add(g.instanceId);
@@ -4123,6 +4139,9 @@ const actions = {
     state.settings[d.key] = state.settings[d.key] === false;
     applySettings(); render(); saveSettings();
   },
+  toggleDownloads: () => toggleDownloads(),
+  clearDownloads: () => clearDownloads(),
+  setSpeed: (d) => { state.settings.downloadSpeed = d.v; render(); saveSettings(); },
   setAfterClose: (d) => { state.settings.afterGameClose = d.v; render(); saveSettings(); },
 
   setTheme: (d) => { state.settings.theme = d.theme; applySettings(); render(); saveSettings(); },
@@ -4325,6 +4344,7 @@ async function init() {
     state.settings = { theme: 'sakura', language: 'ru', reduceMotion: false, hideOnLaunch: true, checkUpdates: true, autoJava: true, curseforgeKey: '' };
   }
   applySettings();
+  initDownloads({ t, esc, nameOf: (id) => state.instances.find((i) => i.id === id)?.name, mode: () => state.settings.downloadSpeed, lang: () => state.settings.language });
   subscribe();
   try { await loadInstances(); } catch (e) { toast(t('error.generic', { message: e }), true); }
   try { state.dataDir = await api.dataDir(); } catch { /* без обложек тоже можно */ }

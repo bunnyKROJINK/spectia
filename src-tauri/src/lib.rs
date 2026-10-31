@@ -36,6 +36,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            let speed = settings::load(app.handle());
+            net::set_speed(speed.extra.get("downloadSpeed").and_then(|v| v.as_str()).unwrap_or("normal"));
+            net::start_stats(app.handle().clone());
+            Ok(())
+        })
         .manage(window::Saved::default())
         .manage(launch::Running::default())
         .invoke_handler(tauri::generate_handler![
