@@ -18,7 +18,14 @@ export const api = {
   createInstance: (data) => call('create_instance', { data }),
   updateInstance: (instance) => call('update_instance', { instance }),
   deleteInstance: (id) => call('delete_instance', { id }),
-  openInstanceFolder: (id) => call('open_instance_folder', { id }),
+  openInstanceFolder: (id, sub) => call('open_instance_folder', { id, sub: sub || null }),
+  duplicateInstance: (id, name) => call('duplicate_instance', { id, name: name || '' }),
+  getLoaderVersions: (loader, gameVersion) => call('get_loader_versions', { loader, gameVersion }),
+
+  listMods: (id) => call('list_mods', { id }),
+  toggleMod: (id, file) => call('toggle_mod', { id, file }),
+  deleteMod: (id, file) => call('delete_mod', { id, file }),
+  addMods: (id, paths) => call('add_mods', { id, paths }),
 
   listAccounts: () => call('list_accounts'),
   addElyAccount: (username, password, totp) => call('add_ely_account', { username, password, totp: totp || null }),
@@ -38,6 +45,12 @@ export const api = {
 export function on(event, handler) {
   if (inApp) return TAURI.event.listen(event, (e) => handler(e.payload));
   (mockListeners[event] ||= []).push(handler);
+}
+
+/** Файлы, перетащенные в окно лаунчера (только в настоящем приложении). */
+export function onFileDrop(handler) {
+  if (!inApp) return;
+  TAURI.webview.getCurrentWebview().onDragDropEvent((e) => handler(e.payload));
 }
 
 export const win = {
@@ -114,6 +127,38 @@ async function mockInvoke(cmd, args = {}) {
       store.set('instances', store.get('instances', []).filter((i) => i.id !== args.id));
       return null;
     case 'open_instance_folder': return null;
+    case 'duplicate_instance': {
+      const list = store.get('instances', []);
+      const src = list.find((i) => i.id === args.id);
+      const copy = { ...src, id: 'demo-' + Date.now(), name: args.name || src.name + ' (копия)', playTimeSecs: 0, lastPlayed: 0, createdAt: Date.now() };
+      store.set('instances', [copy, ...list]);
+      return copy;
+    }
+    case 'get_loader_versions':
+      await sleep(300);
+      if (args.loader === 'fabric') return [{ version: '0.19.5', stable: true, recommended: true }, { version: '0.19.4', stable: true, recommended: false }, { version: '0.20.0-beta.1', stable: false, recommended: false }];
+      if (args.loader === 'neoforge') return [{ version: '26.3.0.45-beta', stable: false, recommended: true }, { version: '26.3.0.44-beta', stable: false, recommended: false }];
+      if (args.loader === 'forge') return [{ version: args.gameVersion + '-66.0.9', stable: true, recommended: true }];
+      if (args.loader === 'quilt') return [{ version: '0.29.1', stable: true, recommended: true }];
+      return [];
+    case 'list_mods': return store.get('mods-' + args.id, [
+      { file: 'sodium-fabric-0.7.jar', name: 'Sodium', version: '0.7.0', description: 'Ускоряет отрисовку', authors: 'jellysquid3', enabled: true, size: 1200000 },
+      { file: 'iris-1.9.jar.disabled', name: 'Iris', version: '1.9.0', description: 'Шейдеры', authors: 'coderbot', enabled: false, size: 2400000 },
+      { file: 'farmersdelight.jar', name: "Farmer's Delight", version: '1.2.6', description: '', authors: 'vectorwing', enabled: true, size: 3100000 },
+    ]);
+    case 'toggle_mod': {
+      const list = await mockInvoke('list_mods', { id: args.id });
+      const m = list.find((x) => x.file === args.file);
+      m.enabled = !m.enabled; m.file = m.enabled ? m.file.replace(/\.disabled$/, '') : m.file + '.disabled';
+      store.set('mods-' + args.id, list);
+      return m.file;
+    }
+    case 'delete_mod': {
+      const list = (await mockInvoke('list_mods', { id: args.id })).filter((x) => x.file !== args.file);
+      store.set('mods-' + args.id, list);
+      return null;
+    }
+    case 'add_mods': return 0;
 
     case 'list_accounts': return accountInfo();
     case 'add_ely_account': {

@@ -23,7 +23,9 @@
 - [x] Запуск ванильного Minecraft: игра и нужная Java скачиваются сами
 - [x] Вход через Ely.by (с двухфакторной защитой)
 - [x] Автообновление лаунчера
-- [ ] Fabric, Quilt, Forge и NeoForge
+- [x] Fabric, Quilt, Forge и NeoForge (включая старые версии вроде 1.12.2)
+- [x] Список модов: включить, выключить, удалить, перетащить в окно
+- [x] Редактирование и дублирование сборок, время в игре
 - [ ] Вход через Microsoft
 - [ ] Установка модов в один клик
 - [ ] CurseForge (ждём ключ API) и понятное окно для модов, которые можно скачать только с сайта
@@ -51,6 +53,8 @@ src-tauri/           Rust-часть
   src/game.rs        файлы игры: библиотеки, ассеты, аргументы
   src/java.rs        Java от Mojang
   src/launch.rs      запуск игры
+  src/loaders.rs     Fabric, Quilt, Forge, NeoForge
+  src/mods.rs        список модов сборки
   src/updater.rs     автообновление
 ```
 
@@ -84,7 +88,7 @@ Spectia не является официальным продуктом Minecraf
 
 ## English
 
-Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. It features six themes, Russian and English UI, instance management with per-instance settings, Modrinth search, Ely.by sign-in, vanilla game launching with automatic Java download, and self-updates. Mod loaders, Microsoft sign-in, one-click mod installs and CurseForge support are in progress.
+Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. It features six themes, Russian and English UI, instance management with per-instance settings, Modrinth search, Ely.by sign-in, game launching with automatic Java download (vanilla, Fabric, Quilt, Forge, NeoForge), a per-instance mod manager, and self-updates. Microsoft sign-in, one-click mod installs and CurseForge support are in progress.
 
 Build: install Rust and Node.js, then run `npm install` and `npm run build`.
 

@@ -263,8 +263,14 @@ pub fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn open_instance_folder(app: AppHandle, id: String) -> Result<(), String> {
-    let dir = instance_path(&app, &id)?.join("minecraft");
+pub fn open_instance_folder(app: AppHandle, id: String, sub: Option<String>) -> Result<(), String> {
+    let mut dir = instance_path(&app, &id)?.join("minecraft");
+    // Можно открыть сразу нужную папку внутри сборки
+    if let Some(sub) = sub.as_deref() {
+        if ["mods", "saves", "screenshots", "resourcepacks", "shaderpacks", "config"].contains(&sub) {
+            dir = dir.join(sub);
+        }
+    }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     app.opener()
         .open_path(dir.to_string_lossy().to_string(), None::<&str>)

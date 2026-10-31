@@ -6,13 +6,13 @@
 //  • Кнопки помечены data-action="…", а их обработчики лежат в объекте `actions`.
 //  • Поля ввода помечены data-bind="путь.в.state" и сами записывают туда значение.
 
-import { api, win, openUrl, inApp, on } from './api.js';
+import { api, win, openUrl, inApp, on, onFileDrop } from './api.js';
 import { t, setLang, LANGS, formatNumber } from './i18n.js';
 import { THEMES, THEME_ORDER, TINTS, applyTheme } from './themes.js';
 import { icon, heroArt } from './icons.js';
 import { searchModrinth } from './modrinth.js';
 
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.0';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
@@ -34,9 +34,14 @@ const state = {
   selectedId: null,
   versions: null,          // { latest, versions } с серверов Mojang
   versionsError: false,
-  create: { mode: 'scratch', name: '', version: '', loader: 'fabric', tint: 0, snapshots: false },
+  create: { mode: 'scratch', name: '', version: '', loader: 'fabric', loaderVersion: '', tint: 0, snapshots: false },
   edit: null,              // копия сборки, которую сейчас настраиваем
+  instTab: 'general',      // вкладка в настройках сборки: general | mods | launch
+  editSnapshots: false,
   advOpen: false,
+  loaderVersions: {},      // "fabric:26.3" → список версий загрузчика
+  mods: { id: null, list: null, loading: false, query: '', dragging: false },
+  ctx: null,               // меню по правой кнопке: { id, x, y }
   res: { query: '', kind: 'mod', source: 'modrinth', results: null, loading: false, error: false, targetId: null },
   skins: { model: 'classic', selected: 0 },
   accounts: [],
@@ -189,9 +194,11 @@ function viewHome() {
             <span class="chip">Minecraft ${esc(cur.gameVersion)}</span>
             <span class="chip">${esc(loaderLabel(cur.loader))}</span>
             <span class="chip">${esc(t('home.ram', { gb: cur.memoryGb }))}</span>
+            ${cur.playTimeSecs ? `<span class="chip">${esc(t('home.played', { t: formatPlayTime(cur.playTimeSecs) }))}</span>` : ''}
           </div>
         </div>
         <div class="row">
+          <button class="icon-btn" data-action="openFolder" data-id="${esc(cur.id)}" aria-label="${esc(t('is.openFolder'))}" title="${esc(t('is.openFolder'))}">${icon.folder(20)}</button>
           <button class="icon-btn" data-action="openInstance" data-id="${esc(cur.id)}" aria-label="${esc(t('home.instanceSettings'))}" title="${esc(t('home.instanceSettings'))}">${icon.gear()}</button>
           ${playButton(cur.id)}
         </div>
@@ -209,7 +216,7 @@ function viewHome() {
       </div>
       <div class="grid grid-cards">
         ${state.instances.slice(0, 8).map((i) => `
-          <button class="card" data-action="select" data-id="${esc(i.id)}" ${pressed(i.id === cur.id)}>
+          <button class="card" data-action="select" data-id="${esc(i.id)}" data-ctx="${esc(i.id)}" ${pressed(i.id === cur.id)}>
             <span class="cover" style="background:${tint(i.tint)}"></span>
             <span class="card-title ellipsis" style="max-width:100%">${esc(i.name)}</span>
             <span class="small muted">${esc(i.gameVersion)} · ${esc(loaderLabel(i.loader))}</span>
@@ -232,11 +239,11 @@ function findBlock() {
 
 function viewInstances() {
   const rows = state.instances.map((i) => `
-    <div class="list-row">
+    <div class="list-row" data-ctx="${esc(i.id)}">
       <span class="thumb" style="background:${tint(i.tint)}"></span>
       <div class="stack grow" style="gap:3px">
         <span class="card-title ellipsis">${esc(i.name)}</span>
-        <span class="small muted">Minecraft ${esc(i.gameVersion)} · ${esc(loaderLabel(i.loader))} · ${esc(t('home.ram', { gb: i.memoryGb }))}</span>
+        <span class="small muted">Minecraft ${esc(i.gameVersion)} · ${esc(loaderLabel(i.loader))} · ${esc(formatPlayTime(i.playTimeSecs))}</span>
       </div>
       <div class="row" style="gap:8px">
         <button class="icon-btn" data-action="openInstance" data-id="${esc(i.id)}" aria-label="${esc(t('home.instanceSettings'))}" title="${esc(t('home.instanceSettings'))}">${icon.gear(18)}</button>
@@ -263,18 +270,78 @@ function viewInstances() {
   </div>`;
 }
 
-function versionOptions() {
-  const c = state.create;
+/** Список версий Minecraft. bind — куда записывать выбор (create.version или edit.gameVersion). */
+function versionOptions(bind, current, snapshots, change = '') {
   if (state.versionsError) {
     return `<div class="row"><span class="warn">${esc(t('create.versionsError'))}</span>
       <button class="btn sm" data-action="retryVersions">${esc(t('create.retry'))}</button></div>`;
   }
   if (!state.versions) return `<div class="row"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
-  const list = state.versions.versions.filter((v) => v.kind === 'release' || (c.snapshots && v.kind === 'snapshot'));
-  return `<label for="ver" class="sr">${esc(t('create.version'))}</label>
-    <select id="ver" class="input" style="flex:1 1 220px" data-bind="create.version">
-      ${list.map((v) => `<option value="${esc(v.id)}" ${v.id === c.version ? 'selected' : ''}>${esc(v.id === state.versions.latest.release ? t('create.latest', { id: v.id }) : v.id)}</option>`).join('')}
+  const list = state.versions.versions.filter((v) => v.kind === 'release' || (snapshots && v.kind === 'snapshot') || v.id === current);
+  const id = bind.replace('.', '-');
+  return `<label for="${id}" class="sr">${esc(t('create.version'))}</label>
+    <select id="${id}" class="input" style="flex:1 1 220px" data-bind="${bind}" ${change ? `data-change="${change}"` : ''}>
+      ${list.map((v) => `<option value="${esc(v.id)}" ${v.id === current ? 'selected' : ''}>${esc(v.id === state.versions.latest.release ? t('create.latest', { id: v.id }) : v.id)}</option>`).join('')}
     </select>`;
+}
+
+/** Список версий загрузчика (Fabric, Forge…) для выбранной версии игры. */
+function loaderVersionSelect(loader, game, bind, current) {
+  if (loader === 'vanilla' || !game) return '';
+  const key = loader + ':' + game;
+  const list = state.loaderVersions[key];
+  if (list === undefined) fetchLoaderVersions(loader, game);
+  let body;
+  if (list === undefined || list === 'loading') {
+    body = `<div class="row"><span class="spinner"></span><span class="muted">${esc(t('loaderver.loading'))}</span></div>`;
+  } else if (list === 'error') {
+    body = `<div class="row"><span class="warn">${esc(t('loaderver.error'))}</span>
+      <button class="btn sm" data-action="retryLoaderVersions" data-key="${esc(key)}">${esc(t('create.retry'))}</button></div>`;
+  } else if (!list.length) {
+    body = `<span class="warn">${esc(t('loaderver.none', { loader: t('loader.' + loader) }))}</span>`;
+  } else {
+    const rec = list.find((v) => v.recommended) || list[0];
+    const label = (v) => (v.recommended ? t('loaderver.recommended', { v: v.version }) : v.stable ? v.version : t('loaderver.beta', { v: v.version }));
+    body = `<select id="${bind.replace('.', '-')}" class="input" data-bind="${bind}">
+      <option value="" ${!current ? 'selected' : ''}>${esc(label(rec))}</option>
+      ${list.filter((v) => v !== rec).map((v) => `<option value="${esc(v.version)}" ${v.version === current ? 'selected' : ''}>${esc(label(v))}</option>`).join('')}
+      ${current && !list.some((v) => v.version === current) ? `<option value="${esc(current)}" selected>${esc(current)}</option>` : ''}
+    </select>`;
+  }
+  return `<div class="field" style="max-width:420px">
+    <label for="${bind.replace('.', '-')}" class="label">${esc(t('create.loaderVersion'))}</label>${body}</div>`;
+}
+
+async function fetchLoaderVersions(loader, game) {
+  const key = loader + ':' + game;
+  state.loaderVersions[key] = 'loading';
+  try {
+    state.loaderVersions[key] = await api.getLoaderVersions(loader, game);
+  } catch {
+    state.loaderVersions[key] = 'error';
+  }
+  if (state.view === 'create' || state.view === 'instance') render();
+}
+
+function loaderCards(current, action) {
+  return `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px" role="group" aria-label="${esc(t('create.loader'))}">
+    ${LOADERS.map((l) => `<button class="card loader-card" data-action="${action}" data-loader="${l}" ${pressed(l === current)}>
+      <span class="card-title">${esc(t('loader.' + l))}</span>
+      <span class="small muted" style="line-height:1.4">${esc(t('loader.' + l + '.hint'))}</span>
+    </button>`).join('')}
+  </div>`;
+}
+
+function tintButtons(current, action) {
+  return TINTS.map((g, n) => `<button class="tint-btn" style="background:${g}" data-action="${action}" data-n="${n}" ${pressed(n === current)} aria-label="${esc(t('create.coverN', { n: n + 1 }))}"></button>`).join('');
+}
+
+function formatPlayTime(secs) {
+  if (!secs) return t('time.none');
+  if (secs < 60) return t('time.lessMin');
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return h ? t('time.h', { h, m }) : t('time.min', { m });
 }
 
 function viewCreate() {
@@ -289,7 +356,7 @@ function viewCreate() {
       <div class="field">
         <span class="label">${esc(t('create.cover'))}</span>
         <div class="row" style="gap:6px" role="group" aria-label="${esc(t('create.cover'))}">
-          ${TINTS.map((g, n) => `<button class="tint-btn" style="background:${g}" data-action="setTint" data-n="${n}" ${pressed(n === c.tint)} aria-label="${esc(t('create.coverN', { n: n + 1 }))}"></button>`).join('')}
+          ${tintButtons(c.tint, 'setTint')}
         </div>
       </div>
     </section>
@@ -297,7 +364,7 @@ function viewCreate() {
     <section class="panel pad stack" style="gap:12px">
       <h2 class="h2">${esc(t('create.version'))}</h2>
       <div class="row">
-        ${versionOptions()}
+        ${versionOptions('create.version', c.version, c.snapshots, 'createVersion')}
         <button class="row" role="switch" aria-checked="${c.snapshots}" data-action="toggleSnapshots" style="gap:10px;min-height:44px;border:0;background:transparent;cursor:pointer">
           <span class="switch"></span><span>${esc(t('create.snapshots'))}</span>
         </button>
@@ -306,16 +373,8 @@ function viewCreate() {
 
     <section class="panel pad stack" style="gap:12px">
       <h2 class="h2">${esc(t('create.loader'))}</h2>
-      <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px" role="group" aria-label="${esc(t('create.loader'))}">
-        ${LOADERS.map((l) => `<button class="card loader-card" data-action="setLoader" data-loader="${l}" ${pressed(l === c.loader)}>
-          <span class="card-title">${esc(t('loader.' + l))}</span>
-          <span class="small muted" style="line-height:1.4">${esc(t('loader.' + l + '.hint'))}</span>
-        </button>`).join('')}
-      </div>
-      ${c.loader !== 'vanilla' ? `<div class="field" style="max-width:360px">
-        <label for="lver" class="label">${esc(t('create.loaderVersion'))}</label>
-        <select id="lver" class="input"><option>${esc(t('create.loaderRecommended'))}</option></select>
-      </div>` : ''}
+      ${loaderCards(c.loader, 'setLoader')}
+      ${loaderVersionSelect(c.loader, c.version, 'create.loaderVersion', c.loaderVersion)}
     </section>`;
 
   const importMode = `
@@ -349,19 +408,121 @@ function viewCreate() {
 function viewInstance() {
   const e = state.edit;
   if (!e) return viewInstances();
-  const input = (id, key, type = 'text', placeholder = '', extra = '') =>
-    `<input id="${id}" class="input" type="${type}" placeholder="${esc(placeholder)}" value="${esc(e[key])}" data-bind="edit.${key}" ${extra}>`;
+  const tab = state.instTab;
+  const tabs = ['general', 'mods', 'launch'].map((k) =>
+    `<button role="tab" aria-selected="${tab === k}" data-action="setInstTab" data-tab="${k}">${esc(t('is.tab.' + k))}</button>`).join('');
+
+  let body = '';
+  if (tab === 'general') body = instGeneral(e);
+  if (tab === 'mods') body = instMods(e);
+  if (tab === 'launch') body = instLaunch(e);
 
   return `<div class="view">
     <div class="row" style="gap:14px">
       <button class="icon-btn" data-action="goBack" aria-label="${esc(t('common.back'))}">${icon.back()}</button>
       <span class="thumb" style="width:44px;height:44px;background:${tint(e.tint)}"></span>
-      <div class="stack" style="gap:2px">
+      <div class="stack grow" style="gap:2px;min-width:0">
         <span class="small muted">${esc(t('is.title'))}</span>
-        <h1 style="font-size:24px;font-weight:700">${esc(e.name)}</h1>
+        <h1 class="ellipsis" style="font-size:24px;font-weight:700">${esc(e.name || '…')}</h1>
       </div>
+      <button class="icon-btn" data-action="openFolder" data-id="${esc(e.id)}" aria-label="${esc(t('is.openFolder'))}" title="${esc(t('is.openFolder'))}">${icon.folder()}</button>
+    </div>
+    <div class="tabs" role="tablist">${tabs}</div>
+    ${body}
+    ${tab !== 'mods' ? `<div class="row" style="justify-content:flex-end">
+      <button class="btn" data-action="resetEdit">${esc(t('common.reset'))}</button>
+      <button class="btn accent" data-action="saveInstance">${esc(t('common.save'))}</button>
+    </div>` : ''}
+  </div>`;
+}
+
+function instGeneral(e) {
+  const last = e.lastPlayed ? new Date(e.lastPlayed * 1000).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long', year: 'numeric' }) : t('is.never');
+  return `
+    <section class="panel pad row" style="gap:18px;align-items:flex-end">
+      <span class="thumb" style="width:72px;height:72px;border-radius:14px;background:${tint(e.tint)}"></span>
+      <div class="field" style="flex:1 1 240px">
+        <label for="ename" class="label">${esc(t('create.name'))}</label>
+        <input id="ename" class="input" type="text" maxlength="60" value="${esc(e.name)}" data-bind="edit.name">
+      </div>
+      <div class="field">
+        <span class="label">${esc(t('create.cover'))}</span>
+        <div class="row" style="gap:6px" role="group" aria-label="${esc(t('create.cover'))}">${tintButtons(e.tint, 'setEditTint')}</div>
+      </div>
+    </section>
+
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+      <div class="panel pad stack" style="gap:4px"><span class="small muted">${esc(t('is.playTime'))}</span><span class="h2-lg">${esc(formatPlayTime(e.playTimeSecs))}</span></div>
+      <div class="panel pad stack" style="gap:4px"><span class="small muted">${esc(t('is.lastPlayed'))}</span><span class="h2-lg">${esc(last)}</span></div>
     </div>
 
+    <section class="panel pad stack" style="gap:12px">
+      <h2 class="h2">${esc(t('create.version'))}</h2>
+      <div class="row">${versionOptions('edit.gameVersion', e.gameVersion, state.editSnapshots, 'editVersion')}
+        <button class="row" role="switch" aria-checked="${!!state.editSnapshots}" data-action="toggleEditSnapshots" style="gap:10px;min-height:44px;border:0;background:transparent;cursor:pointer">
+          <span class="switch"></span><span>${esc(t('create.snapshots'))}</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="panel pad stack" style="gap:12px">
+      <h2 class="h2">${esc(t('create.loader'))}</h2>
+      ${loaderCards(e.loader, 'setEditLoader')}
+      ${loaderVersionSelect(e.loader, e.gameVersion, 'edit.loaderVersion', e.loaderVersion)}
+    </section>
+
+    <div class="row">
+      <button class="btn" data-action="duplicate" data-id="${esc(e.id)}">${icon.copy()}<span>${esc(t('is.duplicate'))}</span></button>
+      <button class="btn" data-action="askDelete" data-id="${esc(e.id)}" style="color:var(--warn-text)">${icon.trash()}<span>${esc(t('is.delete'))}</span></button>
+    </div>`;
+}
+
+function instMods(e) {
+  if (e.loader === 'vanilla') {
+    return `<section class="panel empty">${icon.box()}<p class="note" style="max-width:460px">${esc(t('mods.vanilla'))}</p>
+      <button class="btn" data-action="setInstTab" data-tab="general">${esc(t('is.tab.general'))}</button></section>`;
+  }
+  const m = state.mods;
+  if (m.id !== e.id || m.list === null) {
+    if (!m.loading) loadMods(e.id);
+    return `<div class="row" style="padding:20px"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
+  }
+  const q = m.query.trim().toLowerCase();
+  const list = q ? m.list.filter((x) => (x.name + ' ' + x.file).toLowerCase().includes(q)) : m.list;
+  const on = m.list.filter((x) => x.enabled).length;
+  const head = `<div class="row between">
+      <div class="row" style="flex:1 1 280px">
+        <label for="modq" class="sr">${esc(t('mods.search'))}</label>
+        <input id="modq" class="input" type="search" style="max-width:320px" placeholder="${esc(t('mods.search'))}" value="${esc(m.query)}" data-bind="mods.query" data-filter-mods>
+        <span class="small muted">${esc(t('mods.count', { on, all: m.list.length }))}</span>
+      </div>
+      <div class="row" style="gap:8px">
+        <button class="btn sm" data-action="openModsFolder" data-id="${esc(e.id)}">${icon.folder(16)}<span>${esc(t('mods.openFolder'))}</span></button>
+        <button class="btn sm soft" data-action="findMods" data-id="${esc(e.id)}">${esc(t('mods.find'))}</button>
+      </div>
+    </div>`;
+  if (!m.list.length) {
+    return head + `<section class="panel dashed empty" style="min-height:240px">${icon.upload()}
+      <h2 class="h2">${esc(t('mods.empty'))}</h2><p class="note">${esc(t('mods.emptySub'))}</p></section>`;
+  }
+  return head + `<section class="panel list" id="mods-list">
+    ${list.map((x) => `<div class="list-row mod-row ${x.enabled ? '' : 'off'}">
+      <span class="thumb mod-icon" aria-hidden="true">${esc((x.name || '?').charAt(0).toUpperCase())}</span>
+      <div class="stack grow" style="gap:2px">
+        <span class="row" style="gap:8px"><span class="card-title" style="font-size:14px">${esc(x.name)}</span>${x.version ? `<span class="badge">${esc(x.version)}</span>` : ''}</span>
+        ${x.description ? `<span class="small muted ellipsis" style="max-width:560px">${esc(x.description.split('\n')[0])}</span>` : ''}
+        <span class="small muted ellipsis" style="opacity:.75">${esc(x.file)}${x.authors ? ' · ' + esc(t('mods.by', { who: x.authors })) : ''}</span>
+      </div>
+      <button class="switch-row" style="width:auto;min-height:44px" role="switch" aria-checked="${x.enabled}" aria-label="${esc(t('mods.toggle', { name: x.name }))}" data-action="toggleMod" data-file="${esc(x.file)}"><span class="switch"></span></button>
+      <button class="icon-btn" data-action="deleteMod" data-file="${esc(x.file)}" aria-label="${esc(t('mods.delete', { name: x.name }))}" title="${esc(t('mods.delete', { name: x.name }))}">${icon.trash()}</button>
+    </div>`).join('')}
+  </section>`;
+}
+
+function instLaunch(e) {
+  const input = (id, key, type = 'text', placeholder = '', extra = '') =>
+    `<input id="${id}" class="input" type="${type}" placeholder="${esc(placeholder)}" value="${esc(e[key])}" data-bind="edit.${key}" ${extra}>`;
+  return `
     <section class="panel pad stack" style="gap:12px">
       <div class="row between" style="align-items:baseline">
         <h2 class="h2">${esc(t('is.memory'))}</h2>
@@ -418,16 +579,19 @@ function viewInstance() {
         </div>
         ${switchRow('toggleEdit', 'showConsole', e.showConsole, t('is.console'))}
       </div>` : ''}
-    </section>
+    </section>`;
+}
 
-    <div class="row between">
-      <button class="btn" data-action="askDelete" data-id="${esc(e.id)}" style="color:var(--warn-text)">${icon.trash()}<span>${esc(t('is.delete'))}</span></button>
-      <div class="row">
-        <button class="btn" data-action="resetEdit">${esc(t('common.reset'))}</button>
-        <button class="btn accent" data-action="saveInstance">${esc(t('common.save'))}</button>
-      </div>
-    </div>
-  </div>`;
+async function loadMods(id) {
+  state.mods = { ...state.mods, id, loading: true, list: state.mods.id === id ? state.mods.list : null };
+  try {
+    state.mods.list = await api.listMods(id);
+  } catch (err) {
+    state.mods.list = [];
+    toast(t('error.generic', { message: err }), true);
+  }
+  state.mods.loading = false;
+  if (state.view === 'instance') render();
 }
 
 function viewResources() {
@@ -746,6 +910,27 @@ function updateDialog() {
   </div></div>`;
 }
 
+function contextMenu() {
+  const { id, x, y } = state.ctx;
+  const item = (action, ic, label, extra = '') =>
+    `<button role="menuitem" data-action="${action}" data-id="${esc(id)}" ${extra}>${ic}<span>${esc(t(label))}</span></button>`;
+  // Не даём меню вылезти за край окна
+  const left = Math.min(x, window.innerWidth - 230);
+  const top = Math.min(y, window.innerHeight - 330);
+  return `<div class="ctx-backdrop" data-action="closeCtx"></div>
+    <div class="ctx" role="menu" aria-label="${esc(t('ctx.label'))}" style="left:${left}px;top:${top}px">
+      ${item('ctxPlay', icon.play(14), 'ctx.play')}
+      ${item('ctxSettings', icon.gear(16), 'ctx.settings')}
+      ${item('ctxFolder', icon.folder(16), 'ctx.folder')}
+      <div class="ctx-sep" role="separator"></div>
+      ${item('ctxRename', icon.edit(), 'ctx.rename')}
+      ${item('ctxCover', icon.palette(), 'ctx.cover')}
+      ${item('ctxDuplicate', icon.copy(), 'ctx.duplicate')}
+      <div class="ctx-sep" role="separator"></div>
+      ${item('ctxDelete', icon.trash(), 'ctx.delete', 'class="danger"')}
+    </div>`;
+}
+
 function renderOverlay() {
   let html = '';
   const d = state.dialog;
@@ -791,6 +976,43 @@ function renderOverlay() {
       </div></div></div>`;
   }
   if (d?.type === 'update' && state.update) html += updateDialog();
+  if (d?.type === 'rename') {
+    html += `<div class="overlay" data-action="closeDialog"><form class="dialog" style="max-width:440px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop data-submit="renameSubmit">
+      <h2 id="dlg-title">${esc(t('rename.title'))}</h2>
+      <label for="rename-input" class="sr">${esc(t('rename.title'))}</label>
+      <input id="rename-input" class="input" maxlength="60" value="${esc(d.name)}" data-bind="dialog.name" autofocus>
+      <div class="row" style="justify-content:flex-end">
+        <button type="button" class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
+        <button type="submit" class="btn accent">${esc(t('common.save'))}</button>
+      </div></form></div>`;
+  }
+  if (d?.type === 'cover') {
+    const inst = state.instances.find((i) => i.id === d.id);
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" style="max-width:440px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <h2 id="dlg-title">${esc(t('cover.title'))}</h2>
+      <div class="row" style="gap:12px;align-items:center">
+        <span class="thumb" style="width:64px;height:64px;border-radius:12px;background:${tint(inst?.tint)}"></span>
+        <div class="row" style="gap:6px" role="group" aria-label="${esc(t('cover.title'))}">${tintButtons(inst?.tint ?? 0, 'pickCover')}</div>
+      </div>
+      <div class="row" style="justify-content:flex-end"><button class="btn accent" data-action="closeDialog">${esc(t('common.close'))}</button></div>
+    </div></div>`;
+  }
+  if (d?.type === 'confirmChange') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="row" style="align-items:flex-start;gap:14px;flex-wrap:nowrap">
+        <span class="avatar" style="background:var(--warn-soft);color:var(--warn-text)">${icon.warn()}</span>
+        <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('is.changeTitle'))}</h2><p class="note">${esc(t('is.changeText'))}</p></div>
+      </div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
+        <button class="btn" data-action="changeJust">${esc(t('is.changeJust'))}</button>
+        <button class="btn accent" data-action="changeCopy">${esc(t('is.changeCopy'))}</button>
+      </div></div></div>`;
+  }
+  if (state.ctx) html += contextMenu();
+  if (state.mods.dragging && state.view === 'instance' && state.instTab === 'mods') {
+    html += `<div class="drop-hint">${icon.upload()}<span>${esc(t('mods.drop'))}</span></div>`;
+  }
   if (state.toast) html += `<div class="toast ${state.toast.error ? 'error' : ''}" role="status">${esc(state.toast.text)}</div>`;
   $('#overlay').innerHTML = html;
 }
@@ -858,7 +1080,8 @@ async function launch(id) {
     const code = String(e);
     const inst = state.instances.find((i) => i.id === id);
     if (code === 'NO_ACCOUNT') { state.dialog = { type: 'noAccount' }; }
-    else if (code === 'LOADER_NOT_YET') toast(t('launch.loaderNotYet', { loader: t('loader.' + (inst?.loader || 'fabric')) }));
+    else if (code.startsWith('NO_LOADER_FOR_VERSION')) toast(t('launch.noLoaderVersion', { loader: t('loader.' + (inst?.loader || 'fabric')), version: inst?.gameVersion }), true);
+    else if (code.startsWith('LOADER_INSTALL_FAILED')) state.dialog = { type: 'crash', id, log: code.replace(/^LOADER_INSTALL_FAILED:\s*/, '') };
     else if (code.startsWith('JAVA_START_FAILED')) toast(t('launch.javaFailed'), true);
     else if (LAUNCH_ERRORS[code]) toast(LAUNCH_ERRORS[code](), true);
     else toast(t('launch.failed', { message: code }), true);
@@ -892,6 +1115,25 @@ function subscribe() {
     state.updating = u;
     renderOverlay();
   });
+}
+
+async function saveQuick(inst) {
+  try {
+    await api.updateInstance(inst);
+    await loadInstances();
+    if (state.edit?.id === inst.id) Object.assign(state.edit, { name: inst.name, tint: inst.tint });
+  } catch (e) { toast(t('error.generic', { message: e }), true); }
+}
+
+async function doSaveInstance() {
+  try {
+    await api.updateInstance(state.edit);
+    await loadInstances();
+    toast(t('common.saved'));
+    go(state.back === 'instance' ? 'home' : state.back);
+  } catch (e) {
+    toast(t('error.generic', { message: e }), true);
+  }
 }
 
 // ---------- Действия кнопок ----------
@@ -976,14 +1218,14 @@ const actions = {
   },
   setCreateMode: (d) => { state.create.mode = d.mode; render(); },
   setTint: (d) => { state.create.tint = Number(d.n); render(); },
-  setLoader: (d) => { state.create.loader = d.loader; render(); },
+  setLoader: (d) => { state.create.loader = d.loader; state.create.loaderVersion = ''; render(); },
   toggleSnapshots: () => { state.create.snapshots = !state.create.snapshots; render(); },
   retryVersions: () => { state.versionsError = false; render(); loadVersions(); },
   catalogModpacks: () => { state.res.kind = 'modpack'; state.res.results = null; go('resources'); runSearch(); },
   createInstance: async () => {
     const c = state.create;
     try {
-      const inst = await api.createInstance({ name: c.name.trim(), gameVersion: c.version, loader: c.loader, tint: c.tint });
+      const inst = await api.createInstance({ name: c.name.trim(), gameVersion: c.version, loader: c.loader, loaderVersion: c.loader === 'vanilla' ? '' : c.loaderVersion, tint: c.tint });
       await loadInstances();
       state.selectedId = inst.id;
       state.view = 'home';
@@ -999,6 +1241,10 @@ const actions = {
     if (!inst) return;
     state.edit = structuredClone(inst);
     state.advOpen = false;
+    state.instTab = d.tab || 'general';
+    state.editSnapshots = false;
+    state.mods = { id: null, list: null, loading: false, query: '', dragging: false };
+    if (!state.versions) loadVersions();
     go('instance');
   },
   toggleEdit: (d) => { state.edit[d.key] = !state.edit[d.key]; render(); },
@@ -1007,15 +1253,14 @@ const actions = {
     const inst = state.instances.find((i) => i.id === state.edit.id);
     if (inst) { state.edit = structuredClone(inst); render(); }
   },
-  saveInstance: async () => {
-    try {
-      await api.updateInstance(state.edit);
-      await loadInstances();
-      toast(t('common.saved'));
-      go(state.back === 'instance' ? 'home' : state.back);
-    } catch (e) {
-      toast(t('error.generic', { message: e }), true);
+  saveInstance: () => {
+    const orig = state.instances.find((i) => i.id === state.edit.id);
+    if (orig && (orig.gameVersion !== state.edit.gameVersion || orig.loader !== state.edit.loader)) {
+      state.dialog = { type: 'confirmChange' };
+      renderOverlay();
+      return;
     }
+    doSaveInstance();
   },
   askDelete: (d) => { state.dialog = { type: 'confirmDelete', id: d.id }; renderOverlay(); },
   closeDialog: () => {
@@ -1035,6 +1280,86 @@ const actions = {
     }
   },
 
+  setInstTab: (d) => { state.instTab = d.tab; render(); },
+  setEditTint: (d) => { state.edit.tint = Number(d.n); render(); },
+  setEditLoader: (d) => {
+    if (state.edit.loader !== d.loader) { state.edit.loader = d.loader; state.edit.loaderVersion = ''; }
+    render();
+  },
+  toggleEditSnapshots: () => { state.editSnapshots = !state.editSnapshots; render(); },
+  retryLoaderVersions: (d) => { delete state.loaderVersions[d.key]; render(); },
+  duplicate: async (d) => {
+    try {
+      const src = state.instances.find((i) => i.id === d.id);
+      const copy = await api.duplicateInstance(d.id, src ? `${src.name} ${t('dup.suffix')}` : '');
+      await loadInstances();
+      toast(t('dup.done', { name: copy.name }));
+      render();
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+
+  toggleMod: async (d) => {
+    try {
+      const newName = await api.toggleMod(state.edit.id, d.file);
+      const m = state.mods.list.find((x) => x.file === d.file);
+      if (m) { m.file = newName; m.enabled = !m.enabled; }
+      render();
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  deleteMod: async (d) => {
+    try {
+      await api.deleteMod(state.edit.id, d.file);
+      state.mods.list = state.mods.list.filter((x) => x.file !== d.file);
+      render();
+      toast(t('mods.deleted'));
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  openModsFolder: async (d) => {
+    if (!inApp) return toast(t('common.comingSoon'));
+    try { await api.openInstanceFolder(d.id, 'mods'); } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  findMods: (d) => {
+    Object.assign(state.res, { targetId: d.id, kind: 'mod', results: null });
+    go('resources');
+    runSearch();
+  },
+
+  closeCtx: () => { state.ctx = null; renderOverlay(); },
+  ctxPlay: (d) => { state.ctx = null; state.selectedId = d.id; go('home'); launch(d.id); },
+  ctxSettings: (d) => { state.ctx = null; renderOverlay(); actions.openInstance(d); },
+  ctxFolder: (d) => { state.ctx = null; renderOverlay(); actions.openFolder(d); },
+  ctxRename: (d) => {
+    const inst = state.instances.find((i) => i.id === d.id);
+    state.ctx = null;
+    state.dialog = { type: 'rename', id: d.id, name: inst?.name ?? '' };
+    renderOverlay();
+    const el = $('#rename-input'); el?.focus(); el?.select();
+  },
+  ctxCover: (d) => { state.ctx = null; state.dialog = { type: 'cover', id: d.id }; renderOverlay(); },
+  ctxDuplicate: (d) => { state.ctx = null; renderOverlay(); actions.duplicate(d); },
+  ctxDelete: (d) => { state.ctx = null; state.dialog = { type: 'confirmDelete', id: d.id }; renderOverlay(); },
+  renameSubmit: async () => {
+    const d = state.dialog;
+    const inst = state.instances.find((i) => i.id === d.id);
+    if (!inst || !d.name.trim()) return;
+    await saveQuick({ ...inst, name: d.name.trim() });
+    state.dialog = null;
+    render();
+  },
+  pickCover: async (d) => {
+    const inst = state.instances.find((i) => i.id === state.dialog.id);
+    if (!inst) return;
+    await saveQuick({ ...inst, tint: Number(d.n) });
+    render();
+  },
+  changeJust: () => { state.dialog = null; doSaveInstance(); },
+  changeCopy: async () => {
+    state.dialog = null;
+    const orig = state.instances.find((i) => i.id === state.edit.id);
+    try { await api.duplicateInstance(state.edit.id, orig ? `${orig.name} ${t('dup.suffix')}` : ''); } catch (e) { return toast(t('error.generic', { message: e }), true); }
+    doSaveInstance();
+  },
+
   setKind: (d) => { state.res.kind = d.kind; state.res.results = null; runSearch(); render(); },
   setSource: (d) => { state.res.source = d.source; render(); if (d.source === 'modrinth' && !state.res.results) runSearch(); },
   search: () => runSearch(),
@@ -1051,6 +1376,8 @@ const actions = {
 
 // Что делать при выборе в выпадающем списке (data-change="…")
 const changes = {
+  createVersion: () => { state.create.loaderVersion = ''; render(); },
+  editVersion: () => { state.edit.loaderVersion = ''; render(); },
   setLanguage: (value) => { state.settings.language = value; applySettings(); render(); saveSettings(); },
   setTarget: (value) => { state.res.targetId = value; state.res.results = null; runSearch(); },
 };
@@ -1073,6 +1400,13 @@ document.addEventListener('input', (ev) => {
   const value = 'number' in el.dataset ? Number(el.value) : el.value;
   setPath(el.dataset.bind, value);
   if (el.id === 'mem') $('#mem-label').textContent = value + ' ' + t('unit.gb');
+  if ('filterMods' in el.dataset) {
+    const pos = el.selectionStart;
+    render();
+    const again = $('#modq');
+    again?.focus();
+    again?.setSelectionRange(pos, pos);
+  }
   if ('search' in el.dataset) {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(runSearch, 350);
@@ -1086,6 +1420,40 @@ document.addEventListener('change', (ev) => {
   if ('saveSettings' in el.dataset) saveSettings();
 });
 
+// Своё меню по правой кнопке вместо системного «Назад / Обновить / Печать»
+document.addEventListener('contextmenu', (ev) => {
+  const field = ev.target.closest('input, textarea');
+  if (field) return; // в полях ввода оставляем обычное меню (копировать / вставить)
+  ev.preventDefault();
+  const card = ev.target.closest('[data-ctx]');
+  if (card) {
+    state.ctx = { id: card.dataset.ctx, x: ev.clientX, y: ev.clientY };
+    renderOverlay();
+    document.querySelector('.ctx button')?.focus();
+  } else if (state.ctx) {
+    actions.closeCtx();
+  }
+});
+
+// Перетаскивание .jar-файлов в окно → в моды открытой сборки
+onFileDrop(async (p) => {
+  const onMods = state.view === 'instance' && state.instTab === 'mods' && state.edit && state.edit.loader !== 'vanilla';
+  if (!onMods) return;
+  if (p.type === 'enter' || p.type === 'over') {
+    if (!state.mods.dragging) { state.mods.dragging = true; renderOverlay(); }
+  } else if (p.type === 'leave') {
+    state.mods.dragging = false; renderOverlay();
+  } else if (p.type === 'drop') {
+    state.mods.dragging = false;
+    try {
+      const n = await api.addMods(state.edit.id, p.paths || []);
+      toast(t('mods.added', { n }));
+      await loadMods(state.edit.id);
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+    renderOverlay();
+  }
+});
+
 document.addEventListener('submit', (ev) => {
   const form = ev.target.closest('[data-submit]');
   if (!form) return;
@@ -1094,10 +1462,13 @@ document.addEventListener('submit', (ev) => {
 });
 
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && state.dialog) actions.closeDialog();
+  if (ev.key === 'Escape' && state.ctx) actions.closeCtx();
+  else if (ev.key === 'Escape' && state.dialog) actions.closeDialog();
 });
 
 // ---------- Запуск ----------
+
+const startedAt = performance.now();
 
 async function init() {
   try {
@@ -1117,6 +1488,12 @@ async function init() {
     }).catch(() => { /* нет интернета или GitHub недоступен — проверим в следующий раз */ });
   }
   document.body.classList.add('ready');
+  // Убираем заставку: не раньше чем через 0,9 с (чтобы анимация успела), но и не задерживаем дольше
+  const splash = $('#splash');
+  if (splash) {
+    const wait = state.settings.reduceMotion ? 0 : Math.max(0, 900 - (performance.now() - startedAt));
+    setTimeout(() => { splash.classList.add('hide'); setTimeout(() => splash.remove(), 500); }, wait);
+  }
   loadVersions(); // заранее, чтобы экран «Новая сборка» открывался мгновенно
 }
 

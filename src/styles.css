@@ -268,6 +268,58 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 24px; cu
 @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(74,222,154,.6); } 70% { box-shadow: 0 0 0 10px rgba(74,222,154,0); } 100% { box-shadow: 0 0 0 0 rgba(74,222,154,0); } }
 
+/* ---------- Вкладки ---------- */
+.tabs { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); align-self: flex-start; }
+.tabs button { height: 36px; padding: 0 18px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; font-size: 14px; color: var(--nav-text); }
+.tabs button:hover { background: var(--hover); }
+.tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+
+/* ---------- Меню по правой кнопке ---------- */
+.ctx-backdrop { position: fixed; inset: 0; z-index: 40; }
+.ctx {
+  position: fixed; z-index: 41; width: 216px; padding: 4px; border-radius: 10px;
+  background: var(--dialog); border: 1px solid var(--border); box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  animation: pop .12s ease; transform-origin: top left;
+}
+.ctx button {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 10px;
+  border: 0; border-radius: 6px; background: transparent; cursor: pointer; font-size: 14px; text-align: left;
+}
+.ctx button:hover, .ctx button:focus-visible { background: var(--accent-soft); color: var(--accent-text); outline: none; }
+.ctx button.danger { color: var(--warn-text); }
+.ctx button.danger:hover { background: var(--warn-soft); color: var(--warn-text); }
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+
+/* ---------- Моды ---------- */
+.mod-row.off { opacity: .55; }
+.mod-icon { display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 18px; color: var(--accent-text); background: var(--accent-soft); }
+.drop-hint {
+  position: fixed; inset: 12px; z-index: 35; border-radius: 16px; border: 2px dashed var(--accent);
+  background: rgba(0,0,0,.45); color: #fff; display: flex; flex-direction: column; gap: 12px;
+  align-items: center; justify-content: center; font-size: 18px; font-weight: 600; pointer-events: none;
+}
+.drop-hint svg { color: var(--accent); }
+
+/* ---------- Заставка ---------- */
+#splash {
+  position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; gap: 14px;
+  align-items: center; justify-content: center; color: var(--accent, #FF8CC6);
+  background: radial-gradient(600px 400px at 50% 45%, var(--g1, rgba(255,120,190,.2)), transparent 70%), var(--bg, #170B15);
+  transition: opacity .45s ease, visibility .45s ease;
+}
+#splash.hide { opacity: 0; visibility: hidden; }
+.splash-moon { animation: moonIn .8s cubic-bezier(.2,.8,.2,1) both; filter: drop-shadow(0 0 18px var(--glow, rgba(255,140,198,.4))); }
+.splash-spark { animation: twinkle 1.2s ease-in-out .5s infinite; transform-origin: 17px 6px; }
+.splash-name { font-size: 22px; font-weight: 600; letter-spacing: 3px; color: var(--text, #fff); animation: nameIn .7s ease .35s both; }
+#splash i { position: absolute; width: 3px; height: 3px; border-radius: 1px; background: #fff; opacity: 0; animation: star 1.4s ease-in-out infinite; }
+.app { animation: appIn .5s ease .1s both; }
+.reduce-motion #splash { display: none; }
+@keyframes moonIn { from { opacity: 0; transform: scale(.6) rotate(-25deg); } to { opacity: 1; transform: none; } }
+@keyframes nameIn { from { opacity: 0; transform: translateY(8px); letter-spacing: 8px; } to { opacity: 1; transform: none; } }
+@keyframes twinkle { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .4; transform: scale(.7); } }
+@keyframes star { 0%, 100% { opacity: 0; } 50% { opacity: .8; } }
+@keyframes appIn { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
+
 @keyframes viewIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
 @keyframes spin { to { transform: rotate(360deg); } }
