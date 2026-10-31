@@ -81,6 +81,11 @@ export const THEMES = {
     bg: '#071224', bg2: '#04202A', dialog: '#0E1E33', g1: 'rgba(60,140,255,0.2)', g2: 'rgba(40,210,210,0.18)',
     accent: '#4C9BFF', accent2: '#39D5D0', accentInk: '#04101F', accentSoft: 'rgba(76,155,255,0.16)', accentText: '#BCD9FF',
     glow: 'rgba(60,180,230,0.34)', avatar: 'linear-gradient(135deg,#2F6FD6,#1FA8A4)', navText: '#C1D2E4', muted: '#9DB1C8' },
+  // Награда за все достижения
+  netherite: { ...DARK, bgMode: 'diagonal',
+    bg: '#141113', bg2: '#1E1820', dialog: '#221D22', g1: 'rgba(200,160,100,0.18)', g2: 'rgba(140,110,180,0.16)',
+    accent: '#D9B26A', accent2: '#9C7FC4', accentInk: '#140F08', accentSoft: 'rgba(217,178,106,0.15)', accentText: '#F0D9A8',
+    glow: 'rgba(217,178,106,0.32)', avatar: 'linear-gradient(135deg,#6B5A4A,#4A3A5A)', navText: '#D8CFCF', muted: '#B3A8AE' },
 };
 
 export const THEME_ORDER = ['night', 'emerald', 'sakura', 'ruby', 'amethyst', 'space', 'ocean', 'halloween', 'sunset', 'aurora', 'deep', 'light', 'midnight'];

@@ -49,6 +49,8 @@
 - [x] Дизайн «Верстак», свои темы с градиентами и узорами
 - [x] Большой музыкальный плеер, любимые треки, таймер сна, музыка в меню
 - [x] Лицо скина, достижения, Spectia Wrapped
+- [x] Откат модов, машина времени, профили модов, сравнение сборок, Doctor 2
+- [x] Достижения 2.0 с книгой, энциклопедия, статистика, созвездие, аксолотль, живые обои
 - [ ] CurseForge в каталоге (ждём ключ API)
 
 Что планируется дальше — в [ROADMAP.md](ROADMAP.md).
@@ -70,6 +72,7 @@ src/                 интерфейс
   js/sound.js        колокольчик
   js/doctor.js       Spectia Doctor: разбор логов
   js/achievements.js достижения и Spectia Wrapped
+  js/pet.js          аксолотль и аквариум
   i18n/ru.js, en.js  переводы
 src-tauri/           Rust-часть
   src/instances.rs   сборки
@@ -86,6 +89,7 @@ src-tauri/           Rust-часть
   src/discord.rs     статус в Discord
   src/curseforge.rs  импорт сборок CurseForge
   src/window.rs      мини-режим
+  src/toolbox.rs     машина времени, профили модов, проверка перед запуском
   src/game.rs        файлы игры: библиотеки, ассеты, аргументы
   src/java.rs        Java от Mojang
   src/launch.rs      запуск игры

@@ -12,14 +12,15 @@ import { t, setLang, LANGS, formatNumber } from './i18n.js';
 import { THEMES, THEME_ORDER, TINTS } from './themes.js';
 import { applyAppearance, applyZoom, resolveTheme, themeFromColors, lum as lumOf } from './appearance.js';
 import { chime } from './sound.js';
+import { setPet, petMood, setAquarium } from './pet.js';
 import { skinCanvas, paintSkins, faceCanvas } from './skinview.js';
 import { icon, heroArt, tintIcon, pixelScene } from './icons.js';
 import { searchModrinth, CATEGORIES, projectDetails, trending } from './modrinth.js';
 import { diagnose, crashDescription, lineLevel } from './doctor.js';
-import { ACHIEVEMENTS, artSvg, facts, newlyUnlocked, wrappedYear, wrappedData } from './achievements.js';
+import { ACHIEVEMENTS, SEASONAL, PERFECT, TIERS, artSvg, facts, newlyUnlocked, wrappedYear, wrappedData, find as findAch, tierOf } from './achievements.js';
 import { matchScore } from './search.js';
 
-const APP_VERSION = '0.7.1';
+const APP_VERSION = '0.8.0';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
@@ -28,13 +29,14 @@ const NAV = [
   { id: 'resources', view: 'resources', ic: 'search' },
   { id: 'news', view: 'news', ic: 'news' },
   { id: 'music', view: 'music', ic: 'music' },
+  { id: 'wiki', view: 'wiki', ic: 'book' },
   { id: 'skins', view: 'skins', ic: 'skin' },
   { id: 'settings', view: 'settings', ic: 'gear' },
 ];
 // Экраны, где рядом с полоской иконок виден список сборок
 const LIST_VIEWS = new Set(['home', 'instances', 'instance', 'create']);
 // Каким пунктом меню подсвечивать каждый экран
-const NAV_OF_VIEW = { home: 'home', instances: 'home', create: 'home', instance: 'home', resources: 'resources', news: 'news', music: 'music', skins: 'skins', settings: 'settings', accounts: '' };
+const NAV_OF_VIEW = { book: '', wiki: 'wiki', home: 'home', instances: 'home', create: 'home', instance: 'home', resources: 'resources', news: 'news', music: 'music', skins: 'skins', settings: 'settings', accounts: '' };
 
 const state = {
   view: 'home',
@@ -71,6 +73,11 @@ const state = {
   mini: false,
   palette: null,           // { query, sel } — окно Ctrl+K
   week: null,              // сессии для графика на главной
+  bookPage: 'tiers',
+  snaps: { id: null, list: null, busy: false },
+  profiles: { id: null, list: null },
+  instView: 'list',        // list | sky (созвездие)
+  wiki: { query: '', results: null, loading: false, mods: null },
   faces: {},               // id аккаунта → картинка скина (для лица)
   ach: null,               // показанная плашка достижения
   wrapped: null,           // { slide } — открытые итоги года
@@ -115,6 +122,39 @@ const loaderLabel = (id) => (id === 'vanilla' ? t('loader.none') : t('loader.' +
 const tint = (n) => TINTS[n] || TINTS[0];
 
 /** Путь к своей картинке-обложке сборки (если есть) */
+const clockText = () => new Date().toLocaleTimeString(document.documentElement.lang, { hour: '2-digit', minute: '2-digit' });
+setInterval(() => { const c = document.getElementById('clock'); if (c) c.textContent = clockText(); }, 10000);
+
+/** Портал при переключении сборок */
+function portal(then) {
+  const el = document.getElementById('portal');
+  if (!el || state.settings.reduceMotion || state.settings.portal === false || matchMedia('(prefers-reduced-motion: reduce)').matches) return then();
+  el.classList.remove('go');
+  void el.offsetWidth;
+  el.classList.add('go');
+  setTimeout(then, 260);
+  setTimeout(() => el.classList.remove('go'), 700);
+}
+
+/** «Удиви меня»: случайная красивая тема (её можно сохранить в редакторе) */
+function dreamTheme() {
+  const r = (a, b) => a + Math.random() * (b - a);
+  const hsl = (h, sat, l) => {
+    const a = (sat / 100) * Math.min(l / 100, 1 - l / 100);
+    const f = (n) => { const k = (n + h / 30) % 12; const c = l / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); return Math.round(255 * c).toString(16).padStart(2, '0'); };
+    return `#${f(0)}${f(8)}${f(4)}`;
+  };
+  const h = Math.floor(r(0, 360));
+  const h2 = (h + r(30, 160)) % 360;
+  const modes = ['glow', 'diagonal', 'vertical', 'glow'];
+  const pats = ['', 'stars', 'dots', 'grid', 'pixels', ''];
+  return {
+    bg: hsl(h, r(30, 55), r(6, 10)), bg2: hsl(h2, r(30, 55), r(8, 14)), bgMode: modes[Math.floor(r(0, modes.length))],
+    accent: hsl((h + r(140, 220)) % 360, r(70, 95), r(62, 72)), accent2: Math.random() > 0.35 ? hsl((h + r(60, 120)) % 360, r(70, 95), r(62, 72)) : '',
+    text: hsl(h, 25, 93), card: '', pattern: pats[Math.floor(r(0, pats.length))], depth: Math.floor(r(1, 3)), glow: Math.round(r(30, 80) / 5) * 5,
+  };
+}
+
 /** Лицо аккаунта: голова скина, а если скина нет — первая буква ника */
 function faceHtml(acc, size = 36) {
   if (!acc) return `<span class="avatar" style="width:${size}px;height:${size}px">?</span>`;
@@ -186,6 +226,7 @@ function applySettings() {
   renderDecorations(theme.deco, state.settings.showDecorations !== false);
   document.documentElement.classList.toggle('reduce-motion', !!state.settings.reduceMotion);
   document.documentElement.classList.toggle('jelly', state.settings.jelly !== false);
+  setPet(state.settings.pet !== false, { running: state.running?.size > 0 });
   applyZoom(state.settings.uiScale || 1);
 }
 
@@ -275,7 +316,7 @@ function loadHomeInfo(inst) {
   return homeInfo[inst.id];
 }
 
-const HIST_TAG = { installed: ['+ УСТ', '#4ED39A'], added: ['+ ФАЙЛ', '#4ED39A'], appeared: ['+ ПАПКА', '#4ED39A'], updated: ['↑ ОБН', 'var(--accent-text)'], enabled: ['● ВКЛ', 'var(--accent-text)'], disabled: ['○ ВЫКЛ', 'var(--muted)'], removed: ['− УДАЛ', 'var(--warn-text)'], vanished: ['− ПАПКА', 'var(--warn-text)'] };
+const HIST_TAG = { installed: ['+ УСТ', '#4ED39A'], added: ['+ ФАЙЛ', '#4ED39A'], appeared: ['+ ПАПКА', '#4ED39A'], updated: ['↑ ОБН', 'var(--accent-text)'], enabled: ['● ВКЛ', 'var(--accent-text)'], disabled: ['○ ВЫКЛ', 'var(--muted)'], removed: ['− УДАЛ', 'var(--warn-text)'], vanished: ['− ПАПКА', 'var(--warn-text)'], restored: ['↺ ВЕРН', '#4ED39A'], snapshot: ['↺ СНИМОК', 'var(--accent-text)'], profile: ['◆ ПРОФ', 'var(--accent-text)'] };
 
 function viewHome() {
   const cur = selected();
@@ -463,6 +504,11 @@ function viewInstances() {
     <div class="row between">
       <h1 class="page-title">${esc(t('inst.title'))}</h1>
       <div class="row" style="gap:8px">
+        <div class="seg" role="group" aria-label="${esc(t('sky.view'))}">
+          <button data-action="setInstView" data-v="list" ${pressed(state.instView === 'list')}>${esc(t('sky.list'))}</button>
+          <button data-action="setInstView" data-v="sky" ${pressed(state.instView === 'sky')}>${icon.stars(14)} ${esc(t('sky.title'))}</button>
+        </div>
+        <button class="btn" data-action="openCompare" ${state.instances.length < 2 ? 'disabled' : ''}>${icon.compare()}<span>${esc(t('cmp.button'))}</span></button>
         <button class="btn" data-action="openPrism">${icon.move()}<span>${esc(t('prism.button'))}</span></button>
         <button class="btn" data-action="importPack">${icon.upload(16)}<span>${esc(t('inst.import'))}</span></button>
         <button class="btn accent" data-action="openCreate">${esc(t('home.newInstance'))}</button>
@@ -471,7 +517,7 @@ function viewInstances() {
     ${filters}
     ${state.instances.length
       ? list.length
-        ? `<section class="panel list">${rows}</section>`
+        ? state.instView === 'sky' ? constellationHtml(list) : `<section class="panel list">${rows}</section>`
         : `<section class="panel empty"><span class="muted">${esc(t(f === 'archive' ? 'org.archiveEmpty' : 'org.filterEmpty'))}</span></section>`
       : `<section class="panel empty">${icon.box()}<h2 class="h2">${esc(t('inst.empty'))}</h2>
            <p class="note">${esc(t('prism.emptyHint'))}</p>
@@ -619,7 +665,7 @@ function viewInstance() {
   const e = state.edit;
   if (!e) return viewInstances();
   const tab = state.instTab;
-  const tabs = ['general', 'mods', 'worlds', 'screens', 'logs', 'launch'].map((k) =>
+  const tabs = ['general', 'mods', 'worlds', 'screens', 'time', 'logs', 'launch'].map((k) =>
     `<button role="tab" aria-selected="${tab === k}" data-action="setInstTab" data-tab="${k}">${esc(t('is.tab.' + k))}</button>`).join('');
 
   let body = '';
@@ -629,6 +675,7 @@ function viewInstance() {
   if (tab === 'worlds') body = instWorlds(e);
   if (tab === 'screens') body = instShots(e);
   if (tab === 'logs') body = instLogs(e);
+  if (tab === 'time') body = instTime(e);
 
   return `<div class="view">
     <div class="row" style="gap:14px">
@@ -773,6 +820,7 @@ function modHistoryView(e) {
         <span><b>${esc(ev.name)}</b> <span class="muted">— ${esc(t('hist.' + ev.action))}</span></span>
         ${ev.detail ? `<span class="small muted ellipsis">${esc(ev.detail)}</span>` : ''}
       </div>
+      ${ev.restore ? `<button class="btn sm" data-action="undoEvent" data-time="${ev.time}" data-restore="${esc(ev.restore)}">${icon.restore()}<span>${esc(t('hist.undo'))}</span></button>` : ''}
       <span class="small muted">${esc(new Date(ev.time * 1000).toLocaleTimeString(document.documentElement.lang, { hour: '2-digit', minute: '2-digit' }))}</span>
     </div>`;
   }).join('');
@@ -831,7 +879,7 @@ function instMods(e) {
       </div>
     </div>` : '';
   const allChecked = list.length && list.every((x) => sel.has(x.file));
-  return head + depsBanner(e) + bulk + `<section class="panel list" id="mods-list">
+  return head + depsBanner(e) + profilesBar(e) + bulk + `<section class="panel list" id="mods-list">
     <label class="check-row" style="padding:4px 12px"><input type="checkbox" data-selall ${allChecked ? 'checked' : ''}><span class="small muted">${esc(t('bulk.all'))}</span></label>
     ${list.map((x) => `<div class="list-row mod-row ${x.enabled ? '' : 'off'}" data-name="${esc(x.name)}" data-file="${esc(x.file)}" ${modMatches(x) ? '' : 'hidden'}>
       <input type="checkbox" class="mod-check" data-sel="${esc(x.file)}" ${sel.has(x.file) ? 'checked' : ''} aria-label="${esc(t('bulk.pick', { name: x.name }))}">
@@ -930,6 +978,44 @@ async function loadLogs(id) {
   state.logs.loading = false;
   if (state.history.id !== id) loadHistory(id);
   if (state.view === 'instance' && state.instTab === 'logs') render();
+}
+
+function profilesBar(e) {
+  const pr = state.profiles;
+  if (pr.id !== e.id) { state.profiles = { id: e.id, list: null }; api.listProfiles(e.id).then((l) => { state.profiles.list = l; if (state.view === 'instance') render(); }).catch(() => { state.profiles.list = []; }); }
+  const list = state.profiles.list || [];
+  return `<section class="panel pad-s row" style="gap:10px">
+    <span class="row" style="gap:8px;flex-wrap:nowrap">${icon.layers()}<b>${esc(t('prof.title'))}</b></span>
+    ${list.length ? list.map((p) => `<span class="row" style="gap:2px;flex-wrap:nowrap"><button class="pill sm" data-action="applyProfile" data-name="${esc(p.name)}" title="${esc(t('prof.apply'))}">${esc(p.name)}</button>
+      <button class="icon-btn" style="width:26px;height:26px;box-shadow:none;background:transparent" data-action="deleteProfile" data-name="${esc(p.name)}" aria-label="${esc(t('prof.delete', { name: p.name }))}">${icon.close()}</button></span>`).join('')
+      : `<span class="small muted">${esc(t('prof.none'))}</span>`}
+    <span class="grow" style="flex:1 1 20px"></span>
+    <button class="btn sm" data-action="saveProfile">${esc(t('prof.save'))}</button>
+  </section>`;
+}
+
+// ---------- Машина времени ----------
+
+function instTime(e) {
+  const sn = state.snaps;
+  if (sn.id !== e.id || sn.list === null) {
+    if (!sn.loading) { state.snaps = { id: e.id, list: null, loading: true }; api.listSnapshots(e.id).then((l) => { state.snaps.list = l; state.snaps.loading = false; render(); }).catch(() => { state.snaps.list = []; }); }
+    return `<div class="row" style="padding:20px"><span class="spinner"></span></div>`;
+  }
+  const date = (sec) => new Date(sec * 1000).toLocaleString(document.documentElement.lang, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  return `
+    <section class="panel pad row between" style="gap:14px">
+      <div class="stack" style="gap:4px;flex:1 1 320px"><h2 class="h2">${esc(t('tm.title'))}</h2><p class="note">${esc(t('tm.sub'))}</p></div>
+      <button class="btn accent" data-action="makeSnapshot" ${sn.busy ? 'disabled' : ''}>${sn.busy ? '<span class="spinner"></span>' : icon.camera()}<span>${esc(t('tm.make'))}</span></button>
+    </section>
+    ${sn.list.length ? `<section class="panel list">${sn.list.map((x) => `<div class="list-row">
+        <span class="thumb mod-icon" style="width:40px;height:40px" aria-hidden="true">${icon.camera(18)}</span>
+        <div class="stack grow" style="gap:2px"><b>${esc(x.label || t('tm.noLabel'))}</b>
+          <span class="small muted">${esc(date(x.time))} · ${esc(t('unit.mb', { n: (x.size / 1048576).toFixed(1) }))}${x.auto ? ' · ' + esc(t('tm.auto')) : ''}</span></div>
+        <button class="btn sm" data-action="askRestoreSnap" data-file="${esc(x.file)}" ${sn.busy ? 'disabled' : ''}>${icon.restore()}<span>${esc(t('tm.restore'))}</span></button>
+        <button class="icon-btn" data-action="deleteSnap" data-file="${esc(x.file)}" aria-label="${esc(t('common.delete'))}">${icon.trash()}</button>
+      </div>`).join('')}</section>`
+      : `<section class="panel empty">${icon.camera(32)}<p class="note" style="max-width:460px">${esc(t('tm.empty'))}</p></section>`}`;
 }
 
 async function loadHistory(id) {
@@ -1352,6 +1438,7 @@ function viewAccounts() {
     <h1 class="page-title">${esc(t('acc.title'))}</h1>
     ${list}
     ${achievementsHtml()}
+    ${(() => { if (state.week === null) { state.week = 'loading'; api.statsSessions().then((l) => { state.week = l; if (state.view === 'accounts') render(); }).catch(() => { state.week = []; }); } return statsHtml(); })()}
     <h2 class="h2" style="margin:8px 0 0 4px">${esc(t('acc.add'))}</h2>
     <div class="grid grid-2">
       <section class="panel pad stack">
@@ -1408,11 +1495,12 @@ function setLook(s) {
         </div>
         <div class="row" style="gap:8px">
           <button class="btn sm" data-action="importTheme">${icon.upload(16)}<span>${esc(t('te.import'))}</span></button>
+          <button class="btn sm" data-action="surpriseTheme">${icon.dice()}<span>${esc(t('dream.button'))}</span></button>
           <button class="btn sm soft" data-action="newTheme">${icon.sparkle()}<span>${esc(t('te.create'))}</span></button>
         </div>
       </div>
       <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr))" role="group" aria-label="${esc(t('set.theme'))}">
-        ${THEME_ORDER.map((id) => card(id, THEMES[id], t('theme.' + id))).join('')}
+        ${[...THEME_ORDER, ...(s.achievements?.legend ? ['netherite'] : [])].map((id) => card(id, THEMES[id], t('theme.' + id))).join('')}
         ${custom.map((c) => card('custom:' + c.id, themeFromColors(c), c.name)).join('')}
       </div>
       ${s.theme.startsWith('custom:') ? `<div class="row"><button class="btn sm" data-action="editTheme">${icon.edit()}<span>${esc(t('te.edit'))}</span></button></div>` : ''}
@@ -1435,11 +1523,11 @@ function setLook(s) {
       <div class="row between">
         <div class="stack" style="gap:2px"><h2 class="h2">${esc(t('look.bg'))}</h2><span class="note">${esc(t('look.bgSub'))}</span></div>
         <div class="row" style="gap:8px">
-          <button class="btn sm soft" data-action="pickBackground">${icon.image(16)}<span>${esc(t('look.bgPick'))}</span></button>
+          <button class="btn sm soft" data-action="pickBackground">${icon.image(16)}<span>${esc(t('look.bgPickVideo'))}</span></button>
           ${bg.path ? `<button class="btn sm" data-action="clearBackground">${esc(t('cover.remove'))}</button>` : ''}
         </div>
       </div>
-      ${bgUrl ? `<div class="bg-preview" style="background-image:url('${esc(bgUrl)}')"></div>
+      ${bgUrl ? `${/\.(mp4|webm)$/i.test(bg.path) ? `<video class="bg-preview" src="${esc(bgUrl)}" autoplay muted loop playsinline style="object-fit:cover"></video>` : `<div class="bg-preview" style="background-image:url('${esc(bgUrl)}')"></div>`}
         <div class="grid grid-2">
           ${rangeRow({ id: 'bgdim', key: 'background.dim', label: t('look.bgDim'), min: 0, max: 90, step: 5, value: bg.dim ?? 65, unit: '%' })}
           ${rangeRow({ id: 'bgblur', key: 'background.blur', label: t('look.bgBlur'), min: 0, max: 30, step: 1, value: bg.blur ?? 8, unit: ' px' })}
@@ -1477,6 +1565,10 @@ function setLook(s) {
       <p class="note">${esc(t('look.ownThemeNote'))}</p>
       <div class="row"><button class="btn sm" data-action="resetLook">${esc(t('look.reset'))}</button></div>
       ${switchRow('toggleOn', 'jelly', s.jelly !== false, t('look.jelly'), t('look.jellySub'))}
+      ${switchRow('toggleOn', 'pet', s.pet !== false, t('look.pet'), t('look.petSub'))}
+      ${switchRow('toggleSetting', 'aquarium', !!s.aquarium, t('look.aquarium'), t('look.aquariumSub'))}
+      ${switchRow('toggleOn', 'clock', s.clock !== false, t('look.clock'))}
+      ${switchRow('toggleOn', 'portal', s.portal !== false, t('look.portal'), t('look.portalSub'))}
       ${switchRow('toggleSetting', 'reduceMotion', s.reduceMotion, t('set.reduceMotion'), t('set.reduceMotionSub'))}
     </section>`;
 }
@@ -1780,7 +1872,7 @@ function playerHtml() {
   </div>`;
 }
 
-const VIEWS = { home: viewHome, instances: viewInstances, create: viewCreate, instance: viewInstance, resources: viewResources, news: viewNews, music: viewMusic, skins: viewSkins, accounts: viewAccounts, settings: viewSettings };
+const VIEWS = { home: viewHome, instances: viewInstances, create: viewCreate, instance: viewInstance, resources: viewResources, wiki: viewWiki, news: viewNews, music: viewMusic, skins: viewSkins, book: viewBook, accounts: viewAccounts, settings: viewSettings };
 
 // ---------- Отрисовка ----------
 
@@ -1796,6 +1888,7 @@ function renderChrome() {
     <button class="searchbox" data-action="openPalette" aria-label="${esc(t('pal.open'))}">${icon.search(14)}<span>${esc(t('pal.search'))}</span><kbd>Ctrl K</kbd></button>
     <div class="grow" data-tauri-drag-region style="align-self:stretch"></div>
     ${!showList && state.music.current ? `<div class="title-player">${playerHtml()}</div>` : ''}
+    ${state.settings.clock !== false ? `<span class="clock" id="clock" aria-label="${esc(t('clock.label'))}">${clockText()}</span>` : ''}
     ${titleRight}`;
 
   const active = NAV_OF_VIEW[state.view];
@@ -1976,6 +2069,221 @@ function projectDialog(d) {
   return `<div class="overlay" data-action="closeDialog"><div class="dialog project-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>${body}</div></div>`;
 }
 
+// ---------- Сравнение сборок ----------
+
+function compareDialog(d) {
+  const opts = (sel) => state.instances.map((i) => `<option value="${esc(i.id)}" ${i.id === sel ? 'selected' : ''}>${esc(i.name)} · ${esc(i.gameVersion)}</option>`).join('');
+  let body = `<div class="row" style="padding:12px"><span class="spinner"></span></div>`;
+  if (d.result) {
+    const r = d.result;
+    const col = (title, list, cls) => `<div class="stack" style="gap:6px;flex:1 1 200px;min-width:0"><span class="eyebrow-mono">${esc(title)} · ${list.length}</span>
+      <div class="cmp-list">${list.map((x) => `<span class="cmp-item ${cls}">${esc(x)}</span>`).join('') || `<span class="small muted">—</span>`}</div></div>`;
+    body = `<div class="row" style="align-items:flex-start;gap:14px">
+      ${col(t('cmp.onlyA', { name: r.a }), r.onlyA, 'a')}
+      ${col(t('cmp.onlyB', { name: r.b }), r.onlyB, 'b')}
+      ${col(t('cmp.diff'), r.diff, 'd')}
+    </div><p class="small muted">${esc(t('cmp.same', { n: r.same }))}</p>`;
+  }
+  return `<div class="overlay" data-action="closeDialog"><div class="dialog" style="max-width:860px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+    <h2 id="dlg-title">${esc(t('cmp.title'))}</h2>
+    <div class="row" style="gap:10px">
+      <label class="sr" for="cmp-a">A</label><select id="cmp-a" class="input" style="flex:1" data-change="cmpA">${opts(d.a)}</select>
+      ${icon.compare()}
+      <label class="sr" for="cmp-b">B</label><select id="cmp-b" class="input" style="flex:1" data-change="cmpB">${opts(d.b)}</select>
+    </div>
+    <div style="max-height:52vh;overflow:auto">${body}</div>
+    <div class="row" style="justify-content:flex-end"><button class="btn accent" data-action="closeDialog">${esc(t('common.close'))}</button></div>
+  </div></div>`;
+}
+
+async function runCompare() {
+  const d = state.dialog;
+  if (d?.type !== 'compare') return;
+  d.result = null; renderOverlay();
+  const load = async (id) => { try { return await api.listMods(id); } catch { return []; } };
+  const [ma, mb] = await Promise.all([load(d.a), load(d.b)]);
+  const key = (m) => (m.modId || m.name || m.file).toLowerCase();
+  const A = new Map(ma.map((m) => [key(m), m]));
+  const B = new Map(mb.map((m) => [key(m), m]));
+  const nameOf = (id) => state.instances.find((i) => i.id === id)?.name || '';
+  const res = { a: nameOf(d.a), b: nameOf(d.b), onlyA: [], onlyB: [], diff: [], same: 0 };
+  for (const [k, m] of A) {
+    const o = B.get(k);
+    if (!o) res.onlyA.push(m.name);
+    else if ((m.version || '') !== (o.version || '')) res.diff.push(`${m.name}: ${m.version || '?'} / ${o.version || '?'}`);
+    else res.same++;
+  }
+  for (const [k, m] of B) if (!A.has(k)) res.onlyB.push(m.name);
+  if (state.dialog === d) { d.result = res; renderOverlay(); }
+}
+
+// ---------- Статистика ----------
+
+function statsHtml() {
+  const list = Array.isArray(state.week) ? state.week : [];
+  if (!list.length) return `<section class="panel pad stack"><h2 class="h2">${esc(t('stats.title'))}</h2><p class="note">${esc(t('stats.empty'))}</p></section>`;
+  const total = list.reduce((a, x) => a + x.seconds, 0);
+  const now = new Date();
+  const months = Array.from({ length: 12 }, (_, i) => { const d = new Date(now.getFullYear(), now.getMonth() - 11 + i, 1); return { y: d.getFullYear(), m: d.getMonth(), secs: 0 }; });
+  for (const x of list) { const d = new Date(x.start * 1000); const mm = months.find((m) => m.y === d.getFullYear() && m.m === d.getMonth()); if (mm) mm.secs += x.seconds; }
+  const maxM = Math.max(...months.map((m) => m.secs), 1);
+  const byInst = {};
+  for (const x of list) byInst[x.name || x.instance] = (byInst[x.name || x.instance] || 0) + x.seconds;
+  const top = Object.entries(byInst).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const maxI = top[0]?.[1] || 1;
+  const lang = document.documentElement.lang;
+  const longest = list.reduce((a, x) => Math.max(a, x.seconds), 0);
+  return `<section class="panel pad stack" style="gap:16px">
+    <div class="row between"><h2 class="h2">${esc(t('stats.title'))}</h2><span class="mono small muted">${esc(t('stats.local'))}</span></div>
+    <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+      <div class="panel stat" style="background:var(--card2)"><span class="eyebrow-mono" style="font-size:calc(10px*var(--fs,1))">${esc(t('stats.total'))}</span><b>${esc(formatPlayTime(total))}</b></div>
+      <div class="panel stat" style="background:var(--card2)"><span class="eyebrow-mono" style="font-size:calc(10px*var(--fs,1))">${esc(t('stats.sessions'))}</span><b>${list.length}</b></div>
+      <div class="panel stat" style="background:var(--card2)"><span class="eyebrow-mono" style="font-size:calc(10px*var(--fs,1))">${esc(t('stats.avg'))}</span><b>${esc(formatPlayTime(Math.round(total / list.length)))}</b></div>
+      <div class="panel stat" style="background:var(--card2)"><span class="eyebrow-mono" style="font-size:calc(10px*var(--fs,1))">${esc(t('stats.longest'))}</span><b>${esc(formatPlayTime(longest))}</b></div>
+    </div>
+    <div class="stack" style="gap:8px"><span class="eyebrow-mono">${esc(t('stats.byMonth'))}</span>
+      <div class="week" style="grid-template-columns:repeat(12,1fr);height:140px">${months.map((m) => `<div class="week-col" title="${esc(formatPlayTime(m.secs))}"><span class="week-bar" style="height:${Math.max(m.secs ? 6 : 2, Math.round((m.secs / maxM) * 100))}%"></span><span class="small muted">${esc(new Date(m.y, m.m, 1).toLocaleDateString(lang, { month: 'short' }))}</span></div>`).join('')}</div></div>
+    <div class="stack" style="gap:8px"><span class="eyebrow-mono">${esc(t('stats.byInstance'))}</span>
+      ${top.map(([name, secs]) => `<div class="hbar"><span class="ellipsis" style="width:180px">${esc(name)}</span><span class="hbar-track"><span style="width:${Math.round((secs / maxI) * 100)}%"></span></span><span class="mono small muted" style="width:90px;text-align:right">${esc(formatPlayTime(secs))}</span></div>`).join('')}</div>
+  </section>`;
+}
+
+// ---------- Созвездие сборок ----------
+
+function hash01(str, salt = 0) {
+  let h = 2166136261 ^ salt;
+  for (const c of str) { h ^= c.codePointAt(0); h = Math.imul(h, 16777619); }
+  return ((h >>> 0) % 10000) / 10000;
+}
+
+function constellationHtml(list) {
+  const W = 1000, H = 520;
+  const pts = list.map((i) => ({ i, x: 60 + hash01(i.id, 1) * (W - 120), y: 50 + hash01(i.id, 7) * (H - 100), r: 3 + Math.min(9, Math.sqrt((i.playTimeSecs || 0) / 3600) * 1.6) }));
+  // Раздвигаем звёзды, которые оказались слишком близко, чтобы подписи не налезали
+  for (let it = 0; it < 40; it++) {
+    for (const p of pts) for (const q of pts) {
+      if (p === q) continue;
+      const dx = q.x - p.x, dy = q.y - p.y, dist = Math.hypot(dx, dy) || 1;
+      if (dist < 140) { const k = (140 - dist) / dist / 2; p.x -= dx * k; p.y -= dy * k * 0.6; q.x += dx * k; q.y += dy * k * 0.6; }
+    }
+    for (const p of pts) { p.x = Math.min(W - 70, Math.max(70, p.x)); p.y = Math.min(H - 60, Math.max(40, p.y)); }
+  }
+  // Линии: сборки из одной папки (или с одним загрузчиком) соединены
+  const lines = [];
+  const groups = {};
+  for (const p of pts) (groups[(p.i.folder || '').trim() || 'loader:' + p.i.loader] ||= []).push(p);
+  for (const g of Object.values(groups)) for (let k = 1; k < g.length; k++) lines.push([g[k - 1], g[k]]);
+  const cur = selected();
+  return `<section class="panel sky" aria-label="${esc(t('sky.title'))}">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(t('sky.title'))}">
+      ${Array.from({ length: 70 }, (_, n) => `<circle cx="${(hash01('s' + n, 3) * W).toFixed(1)}" cy="${(hash01('s' + n, 5) * H).toFixed(1)}" r="${(0.4 + hash01('s' + n, 9) * 1.1).toFixed(2)}" fill="#fff" opacity="${(0.15 + hash01('s' + n, 11) * 0.5).toFixed(2)}"/>`).join('')}
+      ${lines.map(([a, b]) => `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="var(--accent)" stroke-opacity=".35" stroke-width="1.2" stroke-dasharray="4 4"/>`).join('')}
+    </svg>
+    ${pts.map((p) => `<button class="sky-star ${cur?.id === p.i.id ? 'on' : ''}" style="left:${(p.x / W) * 100}%;top:${(p.y / H) * 100}%;--r:${p.r * 2}px" data-action="pickInstance" data-id="${esc(p.i.id)}" aria-label="${esc(p.i.name)}">
+      <span class="sky-dot"></span><span class="sky-label">${esc(p.i.name)}<small>${esc(formatPlayTime(p.i.playTimeSecs))}</small></span></button>`).join('')}
+    <p class="small muted sky-note">${esc(t('sky.note'))}</p>
+  </section>`;
+}
+
+// ---------- Энциклопедия ----------
+
+const wikiBase = () => (document.documentElement.lang === 'ru' ? 'https://ru.minecraft.wiki' : 'https://minecraft.wiki');
+let wikiTimer;
+let wikiSeq = 0;
+
+async function runWikiSearch() {
+  const w = state.wiki;
+  const q = w.query.trim();
+  const seq = ++wikiSeq;
+  if (!q) { w.results = null; return refreshWiki(); }
+  w.loading = true; refreshWiki();
+  try {
+    const res = await fetch(`${wikiBase()}/api.php?action=query&list=search&format=json&origin=*&srlimit=12&srsearch=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (seq !== wikiSeq) return;
+    w.results = (data.query?.search || []).map((x) => ({ title: x.title, snippet: String(x.snippet || '').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#039;/g, "'") }));
+    w.error = false;
+  } catch {
+    if (seq !== wikiSeq) return;
+    w.results = []; w.error = true;
+  }
+  w.loading = false; refreshWiki();
+}
+
+function wikiResultsHtml() {
+  const w = state.wiki;
+  if (w.loading && !w.results) return `<div class="row" style="padding:10px"><span class="spinner"></span></div>`;
+  if (w.error) return `<p class="warn">${esc(t('wiki.error'))}</p>`;
+  if (!w.results) return '';
+  if (!w.results.length) return `<p class="note">${esc(t('res.nothing'))}</p>`;
+  return `<div class="list" style="padding:0">${w.results.map((r) => `<a href="#" class="list-row wiki-row" data-action="openWiki" data-url="${esc(wikiBase() + '/w/' + encodeURIComponent(r.title.replace(/ /g, '_')))}">
+    <span class="thumb mod-icon" style="width:36px;height:36px" aria-hidden="true">${icon.book(16)}</span>
+    <span class="stack grow" style="gap:2px;min-width:0"><b>${esc(r.title)}</b><span class="small muted ellipsis">${esc(r.snippet)}</span></span>${icon.chevronRight()}</a>`).join('')}</div>`;
+}
+
+function refreshWiki() {
+  const box = $('#wiki-results');
+  if (box && state.view === 'wiki') box.innerHTML = wikiResultsHtml();
+}
+
+async function loadWikiMods() {
+  const w = state.wiki;
+  w.mods = 'loading';
+  const ids = new Set();
+  const usedIn = {};
+  for (const inst of visibleInstances()) {
+    try { for (const pid of await api.installedProjects(inst.id)) { ids.add(pid); (usedIn[pid] ||= []).push(inst.name); } } catch { /* пропустим */ }
+  }
+  let list = [];
+  const all = [...ids];
+  try {
+    for (let i = 0; i < all.length; i += 80) {
+      const part = all.slice(i, i + 80);
+      const res = await fetch(`https://api.modrinth.com/v2/projects?ids=${encodeURIComponent(JSON.stringify(part))}`);
+      list = list.concat(await res.json());
+    }
+  } catch { w.mods = 'error'; if (state.view === 'wiki') render(); return; }
+  w.mods = list.filter((p) => p.project_type === 'mod' || p.project_type === 'shader' || p.project_type === 'resourcepack')
+    .map((p) => ({ id: p.id, title: p.title, icon: p.icon_url || '', wiki: p.wiki_url || '', source: p.source_url || '', discord: p.discord_url || '', page: `https://modrinth.com/${p.project_type}/${p.slug}`, usedIn: usedIn[p.id] || [] }))
+    .sort((a, b) => (b.wiki ? 1 : 0) - (a.wiki ? 1 : 0) || a.title.localeCompare(b.title));
+  if (state.view === 'wiki') render();
+}
+
+function viewWiki() {
+  const w = state.wiki;
+  if (w.mods === null) loadWikiMods();
+  const link = (url, label) => url ? `<button class="btn sm" data-action="openWiki" data-url="${esc(url)}">${esc(label)}</button>` : '';
+  const mods = w.mods === 'loading' || w.mods === null
+    ? `<div class="row" style="padding:12px"><span class="spinner"></span></div>`
+    : w.mods === 'error' ? `<p class="warn">${esc(t('res.error', { source: 'Modrinth' }))}</p>`
+    : w.mods.length ? `<div class="grid wiki-grid">${w.mods.map((m) => `<article class="panel wiki-card">
+        <div class="row" style="gap:12px;flex-wrap:nowrap">${m.icon ? `<img class="thumb" style="width:40px;height:40px" src="${esc(m.icon)}" alt="" loading="lazy">` : `<span class="thumb" style="width:40px;height:40px;background:${TINTS[5]}"></span>`}
+          <span class="stack" style="gap:2px;min-width:0"><b class="ellipsis">${esc(m.title)}</b><span class="small muted ellipsis">${esc(m.usedIn.join(', '))}</span></span></div>
+        <div class="row" style="gap:6px">${m.wiki ? `<button class="btn sm accent" data-action="openWiki" data-url="${esc(m.wiki)}">${icon.book(14)}<span>${esc(t('wiki.guide'))}</span></button>` : `<span class="small muted">${esc(t('wiki.noGuide'))}</span>`}
+          ${link(m.page, 'Modrinth')}${link(m.source, t('proj.link.source'))}</div>
+      </article>`).join('')}</div>`
+    : `<p class="note">${esc(t('wiki.noMods'))}</p>`;
+  return `<div class="view">
+    <h1 class="page-title">${esc(t('wiki.title'))}</h1>
+    <section class="panel pad stack" style="gap:12px">
+      <div class="stack" style="gap:2px"><h2 class="h2">${esc(t('wiki.mc'))}</h2><span class="note">${esc(t('wiki.mcSub'))}</span></div>
+      <label for="wq" class="sr">${esc(t('wiki.search'))}</label>
+      <input id="wq" class="input" type="search" placeholder="${esc(t('wiki.search'))}" value="${esc(w.query)}" data-bind="wiki.query" data-wiki-search>
+      <div id="wiki-results">${wikiResultsHtml()}</div>
+    </section>
+    <section class="stack" style="gap:10px">
+      <div class="stack" style="gap:2px;margin-left:4px"><h2 class="h2">${esc(t('wiki.mods'))}</h2><span class="note">${esc(t('wiki.modsSub'))}</span></div>
+      ${mods}
+    </section>
+    <section class="panel pad stack" style="gap:10px">
+      <h2 class="h2">${esc(t('wiki.links'))}</h2>
+      <div class="row" style="gap:8px">
+        ${link(wikiBase(), 'Minecraft Wiki')}${link('https://modrinth.com', 'Modrinth')}${link('https://wiki.fabricmc.net', 'Fabric Wiki')}${link('https://docs.neoforged.net', 'NeoForge Docs')}${link('https://docs.minecraftforge.net', 'Forge Docs')}
+      </div>
+    </section>
+  </div>`;
+}
+
 // ---------- Ctrl+K ----------
 
 function paletteItems() {
@@ -1987,6 +2295,7 @@ function paletteItems() {
   }
   for (const n of NAV) items.push({ label: t('nav.' + n.id), hint: t('pal.section'), ic: 'chevronRight', ...go(n.view) });
   items.push({ label: t('acc.title'), hint: t('pal.section'), ic: 'chevronRight', ...go('accounts') });
+  items.push({ label: t('book.title'), hint: t('pal.section'), ic: 'book', ...go('book') });
   for (const k of ['look', 'sound', 'game', 'general']) items.push({ label: t('set.title') + ': ' + t('set.tab.' + k), hint: t('pal.section'), ic: 'gear', run: () => { state.palette = null; state.setTab = k; go('settings').run(); } });
   items.push({ label: t('home.newInstance'), hint: t('pal.action'), ic: 'sparkle', run: () => { state.palette = null; actions.openCreate(); } });
   items.push({ label: t('inst.import'), hint: t('pal.action'), ic: 'upload', run: () => { state.palette = null; renderOverlay(); actions.importPack(); } });
@@ -2137,9 +2446,10 @@ function renderOverlay() {
   if (d?.type === 'update' && state.update) html += updateDialog();
   if (d?.type === 'rename') {
     html += `<div class="overlay" data-action="closeDialog"><form class="dialog" style="max-width:440px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop data-submit="renameSubmit">
-      <h2 id="dlg-title">${esc(t('rename.title'))}</h2>
+      <h2 id="dlg-title">${esc(t(d.profile ? 'prof.saveTitle' : 'rename.title'))}</h2>
+      ${d.profile ? `<p class="note">${esc(t('prof.saveSub'))}</p>` : ''}
       <label for="rename-input" class="sr">${esc(t('rename.title'))}</label>
-      <input id="rename-input" class="input" maxlength="60" value="${esc(d.name)}" data-bind="dialog.name" autofocus>
+      <input id="rename-input" class="input" maxlength="60" value="${esc(d.name)}" data-bind="dialog.name" placeholder="${esc(d.profile ? t('prof.placeholder') : '')}" autofocus>
       <div class="row" style="justify-content:flex-end">
         <button type="button" class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
         <button type="submit" class="btn accent">${esc(t('common.save'))}</button>
@@ -2254,6 +2564,25 @@ function renderOverlay() {
       </div></div></div>`;
   }
   if (d?.type === 'project') html += projectDialog(d);
+  if (d?.type === 'precheck') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" style="max-width:560px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="row" style="gap:14px;flex-wrap:nowrap;align-items:flex-start"><span class="avatar" style="background:var(--warn-soft);color:var(--warn-text)">${icon.warn()}</span>
+        <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('pre.title'))}</h2><p class="note">${esc(t('pre.sub'))}</p></div></div>
+      <div class="stack" style="gap:8px">${d.problems.map((p) => `<div class="doc-card"><span class="doc-ico">${icon.warn(16)}</span><span class="stack" style="gap:2px"><b>${esc(t('pre.' + p.kind + '.title', { name: p.name, detail: p.detail, kind: t('loader.' + (p.detail === 'legacy' ? 'forge' : p.detail)) }))}</b><span class="note">${esc(t('pre.' + p.kind + '.text', { name: p.name, detail: p.detail }))}</span></span></div>`).join('')}</div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="openInstance" data-id="${esc(d.id)}" data-tab="mods">${esc(t('news.openMods'))}</button>
+        <button class="btn accent" data-action="launchAnyway" data-id="${esc(d.id)}">${esc(t('pre.anyway'))}</button>
+      </div></div></div>`;
+  }
+  if (d?.type === 'compare') html += compareDialog(d);
+  if (d?.type === 'restoreSnap') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="stack" style="gap:6px"><h2 id="dlg-title">${esc(t('tm.restoreTitle'))}</h2><p class="note">${esc(t('tm.restoreText'))}</p></div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
+        <button class="btn accent" data-action="restoreSnap" data-file="${esc(d.file)}" ${d.busy ? 'disabled' : ''}>${d.busy ? '<span class="spinner"></span>' : ''}${esc(t('tm.restore'))}</button>
+      </div></div></div>`;
+  }
   if (d?.type === 'patch') {
     html += `<div class="overlay" data-action="closeDialog"><div class="dialog project-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
       <h2 id="dlg-title">${esc(d.title)}</h2>
@@ -2366,6 +2695,7 @@ function viewMini() {
 let lastView = null;
 function render(scrollTop = false) {
   document.body.classList.toggle('is-mini', state.mini);
+  setAquarium(!!state.settings?.aquarium && state.view === 'home' && !state.mini);
   if (state.mini) {
     $('#titlebar').innerHTML = '';
     $('#sidebar').innerHTML = '';
@@ -2439,8 +2769,17 @@ const LAUNCH_ERRORS = {
 
 const stopping = new Set();
 
-async function launch(id) {
+async function launch(id, force = false) {
   if (state.progress[id] || state.running.has(id)) return;
+  if (!force) {
+    let problems = [];
+    try { problems = await api.precheck(id); } catch { /* проверка не главное */ }
+    if (problems.length) {
+      state.dialog = { type: 'precheck', id, problems };
+      renderOverlay();
+      return;
+    }
+  }
   if (!activeAccount()) {
     state.dialog = { type: 'noAccount' };
     renderOverlay();
@@ -2481,10 +2820,12 @@ function subscribe() {
     delete state.progress[g.instanceId];
     if (g.running) {
       state.running.add(g.instanceId);
+      petMood(true);
       const inst = state.instances.find((i) => i.id === g.instanceId);
       celebrate('ready', t('notify.readyTitle'), t('notify.readyBody', { name: inst?.name || 'Minecraft' }));
     } else {
       state.running.delete(g.instanceId);
+      petMood(state.running.size > 0);
       state.week = null;
       delete homeInfo[g.instanceId];
       setTimeout(checkAchievements, 1500);
@@ -2663,6 +3004,7 @@ async function checkAchievements() {
   if (!fresh.length) return;
   for (const id of fresh) { unlocked[id] = Math.floor(Date.now() / 1000); achQueue.push(id); }
   saveSettings();
+  if (fresh.includes('legend')) toast(t('book.legendReward'));
   showNextAch();
 }
 
@@ -2674,27 +3016,87 @@ function showNextAch() {
   if (s.notifications !== false && !document.hasFocus()) api.notify(t('ach.got'), t('ach.' + state.ach)).catch(() => {});
   renderOverlay();
   clearTimeout(achTimer);
-  achTimer = setTimeout(() => { state.ach = null; renderOverlay(); setTimeout(showNextAch, 400); }, 5000);
+  achTimer = setTimeout(() => { state.ach = null; renderOverlay(); setTimeout(showNextAch, 400); }, tierOf(state.ach) === 'netherite' ? 7000 : 5000);
 }
 
 function achToastHtml() {
-  const a = ACHIEVEMENTS.find((x) => x.id === state.ach);
+  const a = findAch(state.ach);
   if (!a) return '';
-  return `<div class="ach-toast" role="status"><span class="ach-ico">${artSvg(a.art, 28)}</span>
-    <span class="stack" style="gap:2px"><span class="t1">${esc(t('ach.got'))}</span><b>${esc(t('ach.' + a.id))}</b></span></div>`;
+  const tier = a.tier || 'seasonal';
+  const sparks = tier === 'diamond' || tier === 'netherite' ? '<i></i><i></i><i></i><i></i><i></i><i></i>' : '';
+  return `${tier === 'netherite' ? '<div class="ach-flash" aria-hidden="true"></div>' : ''}
+    <div class="ach-toast tier-${tier}" role="status"><span class="ach-sparks" aria-hidden="true">${sparks}</span><span class="ach-ico">${artSvg(a.art, 28)}</span>
+    <span class="stack" style="gap:2px"><span class="t1">${esc(t(SEASONAL.includes(a) ? 'ach.gotSeasonal' : 'ach.got'))}</span><b>${esc(t('ach.' + a.id))}</b>
+    <span class="t2">${esc(t('tier.' + tier))}</span></span></div>`;
 }
 
+const achDate = (sec) => new Date(sec * 1000).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long', year: 'numeric' });
+
+function achCard(a, got) {
+  const tier = a.tier || 'seasonal';
+  return `<div class="ach-card tier-${tier} ${got ? '' : 'locked'}">
+    <span class="ach-ico">${artSvg(a.art, 28)}</span>
+    <span class="stack" style="gap:2px;min-width:0"><b>${esc(t('ach.' + a.id))}</b><span class="small muted">${esc(t('ach.' + a.id + '.how'))}</span>
+    ${got ? `<span class="mono small ach-date">${esc(achDate(got))}</span>` : ''}</span>
+  </div>`;
+}
+
+/** Короткий блок в профиле: сколько собрано + кнопка книги */
 function achievementsHtml() {
   const got = state.settings.achievements || {};
-  const n = ACHIEVEMENTS.filter((a) => got[a.id]).length;
-  return `<section class="stack" style="gap:10px">
-    <div class="row between"><h2 class="h2" style="margin-left:4px">${esc(t('ach.title'))}</h2><span class="mono small muted">${n} / ${ACHIEVEMENTS.length}</span></div>
-    <div class="ach-grid">${ACHIEVEMENTS.map((a) => `<div class="panel ach ${got[a.id] ? '' : 'locked'}">
-      <span class="ach-ico">${artSvg(a.art, 28)}</span>
-      <span class="stack" style="gap:2px;min-width:0"><b>${esc(t('ach.' + a.id))}</b><span class="small muted">${esc(t('ach.' + a.id + '.how'))}</span>
-      ${got[a.id] ? `<span class="mono small" style="color:var(--accent-text)">${esc(new Date(got[a.id] * 1000).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long', year: 'numeric' }))}</span>` : ''}</span>
-    </div>`).join('')}</div>
+  const all = [...ACHIEVEMENTS, PERFECT];
+  const n = all.filter((a) => got[a.id]).length;
+  const recent = Object.entries(got).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([id]) => findAch(id)).filter(Boolean);
+  return `<section class="panel pad stack" style="gap:12px">
+    <div class="row between">
+      <div class="stack" style="gap:2px"><h2 class="h2">${esc(t('ach.title'))}</h2><span class="mono small muted">${n} / ${all.length} · ${esc(t('book.seasonalShort', { n: SEASONAL.filter((x) => got[x.id]).length, all: SEASONAL.length }))}</span></div>
+      <button class="btn accent" data-action="nav" data-view="book">${icon.book ? icon.book(16) : ''}<span>${esc(t('book.open'))}</span></button>
+    </div>
+    ${recent.length ? `<div class="ach-grid">${recent.map((a) => achCard(a, got[a.id])).join('')}</div>` : `<p class="note">${esc(t('book.empty'))}</p>`}
   </section>`;
+}
+
+// ---------- Книга достижений ----------
+
+function viewBook() {
+  const got = state.settings.achievements || {};
+  const page = state.bookPage || 'tiers';
+  const tabs = ['tiers', 'chains', 'seasonal'].map((k) => `<button role="tab" aria-selected="${page === k}" data-action="setBookPage" data-p="${k}">${esc(t('book.page.' + k))}</button>`).join('');
+  let body = '';
+  if (page === 'tiers') {
+    body = [...TIERS].reverse().map((tier) => {
+      const list = [...ACHIEVEMENTS, PERFECT].filter((a) => a.tier === tier);
+      return `<div class="book-chapter"><h3 class="book-h tier-text-${tier}">${esc(t('tier.' + tier))} <span class="mono small muted">${list.filter((a) => got[a.id]).length} / ${list.length}</span></h3>
+        <div class="ach-grid">${list.map((a) => achCard(a, got[a.id])).join('')}</div></div>`;
+    }).join('');
+  } else if (page === 'chains') {
+    const chains = [...new Set(ACHIEVEMENTS.filter((a) => a.chain).map((a) => a.chain))];
+    body = chains.map((c) => {
+      const steps = ACHIEVEMENTS.filter((a) => a.chain === c).sort((a, b) => a.step - b.step);
+      const done = steps.filter((a) => got[a.id]).length;
+      return `<div class="book-chapter"><h3 class="book-h">${esc(t('chain.' + c))} <span class="mono small muted">${done} / ${steps.length}</span></h3>
+        <div class="chain">${steps.map((a, i) => `${i ? `<span class="chain-link ${got[a.id] ? 'on' : ''}" aria-hidden="true"></span>` : ''}${achCard(a, got[a.id])}`).join('')}</div></div>`;
+    }).join('');
+  } else {
+    body = `<p class="note">${esc(t('book.seasonalNote'))}</p><div class="ach-grid">${SEASONAL.map((a) => achCard(a, got[a.id])).join('')}</div>`;
+  }
+  const all = [...ACHIEVEMENTS, PERFECT];
+  const n = all.filter((a) => got[a.id]).length;
+  return `<div class="view">
+    ${pageHead(t('book.title'), 'goBack')}
+    <section class="book">
+      <div class="book-cover">
+        <span class="book-crest">${artSvg('book', 56)}</span>
+        <div class="stack" style="gap:4px"><span class="eyebrow-mono">${esc(t('book.sub'))}</span><b class="book-count">${n} / ${all.length}</b>
+          <span class="bar" style="width:220px"><span style="width:${Math.round((n / all.length) * 100)}%"></span></span></div>
+        ${got.legend ? `<p class="note" style="color:var(--accent-text)">${esc(t('book.legendReward'))}</p>` : `<p class="note">${esc(t('book.legendHint'))}</p>`}
+      </div>
+      <div class="book-pages stack" style="gap:16px">
+        <div class="tabs" role="tablist">${tabs}</div>
+        ${body}
+      </div>
+    </section>
+  </div>`;
 }
 
 // ---------- Spectia Wrapped ----------
@@ -2890,6 +3292,7 @@ const actions = {
     const inst = state.instances.find((i) => i.id === d.id);
     if (!inst) return;
     state.edit = structuredClone(inst);
+    state.dialog = null;
     state.advOpen = false;
     state.instTab = d.tab || 'general';
     state.editSnapshots = false;
@@ -2997,6 +3400,7 @@ const actions = {
     const d = state.dialog;
     d.busy = true; renderOverlay();
     try {
+      try { await api.makeSnapshot(state.edit.id, t('tm.beforeUpdate'), true); } catch { /* без снимка тоже можно */ }
       const n = await api.applyModUpdates(state.edit.id, d.list.filter((_, i) => d.picked.has(i)));
       state.dialog = null;
       toast(t('mods.updDone', { n }));
@@ -3113,6 +3517,12 @@ const actions = {
   ctxDelete: (d) => { state.ctx = null; state.dialog = { type: 'confirmDelete', id: d.id }; renderOverlay(); },
   renameSubmit: async () => {
     const d = state.dialog;
+    if (d.profile) {
+      if (!d.name.trim()) return;
+      try { state.profiles.list = await api.saveProfile(d.id, d.name.trim()); toast(t('prof.saved', { name: d.name.trim() })); } catch (e) { toast(t('error.generic', { message: e }), true); }
+      state.dialog = null; render();
+      return;
+    }
     const inst = state.instances.find((i) => i.id === d.id);
     if (!inst || !d.name.trim()) return;
     await saveQuick({ ...inst, name: d.name.trim() });
@@ -3137,8 +3547,68 @@ const actions = {
   setSource: (d) => { state.res.source = d.source; render(); if (d.source === 'modrinth' && !state.res.results) runSearch(); },
   search: () => runSearch(),
 
+  // ---------- 0.8 ----------
+  openWiki: (d) => { openUrl(d.url); bump('wiki'); },
+  setBookPage: (d) => { state.bookPage = d.p; render(); },
+  undoEvent: async (d) => {
+    try {
+      const file = await api.undoEvent(state.edit.id, Number(d.time), d.restore);
+      toast(t('hist.undone', { file }));
+      state.history.list = null; state.mods.list = null; state.deps.id = null;
+      bump('restores');
+    } catch (e) { toast(String(e) === 'TRASH_GONE' ? t('hist.trashGone') : t('error.generic', { message: e }), true); }
+    render();
+  },
+  saveProfile: () => { state.dialog = { type: 'rename', profile: true, id: state.edit.id, name: '' }; renderOverlay(); $('#rename-input')?.focus(); },
+  applyProfile: async (d) => {
+    try { const n = await api.applyProfile(state.edit.id, d.name); toast(t('prof.applied', { name: d.name, n })); state.mods.list = null; state.deps.id = null; } catch (e) { toast(t('error.generic', { message: e }), true); }
+    render();
+  },
+  deleteProfile: async (d) => {
+    try { state.profiles.list = await api.deleteProfile(state.edit.id, d.name); } catch (e) { toast(t('error.generic', { message: e }), true); }
+    render();
+  },
+  makeSnapshot: async () => {
+    state.snaps.busy = true; render();
+    try { await api.makeSnapshot(state.edit.id, t('tm.manual', { date: new Date().toLocaleString(document.documentElement.lang, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) }), false); toast(t('tm.made')); state.snaps.list = null; }
+    catch (e) { toast(t('error.generic', { message: e }), true); }
+    state.snaps.busy = false; render();
+  },
+  askRestoreSnap: (d) => { state.dialog = { type: 'restoreSnap', file: d.file, busy: false }; renderOverlay(); },
+  restoreSnap: async (d) => {
+    const dlg = state.dialog;
+    if (state.running.has(state.edit.id)) return toast(t('bk.closeGame'), true);
+    dlg.busy = true; renderOverlay();
+    try {
+      await api.restoreSnapshot(state.edit.id, d.file, t('tm.before'));
+      state.dialog = null; toast(t('tm.restored'));
+      state.snaps.list = null; state.mods.list = null; state.history.list = null; state.deps.id = null;
+      bump('restores');
+    } catch (e) { dlg.busy = false; toast(t('error.generic', { message: e }), true); }
+    render();
+  },
+  deleteSnap: async (d) => { try { await api.deleteSnapshot(state.edit.id, d.file); state.snaps.list = null; } catch (e) { toast(t('error.generic', { message: e }), true); } render(); },
+  launchAnyway: (d) => { state.dialog = null; renderOverlay(); launch(d.id, true); },
+  setInstView: (d) => { state.instView = d.v; render(); },
+  openCompare: () => {
+    const v = visibleInstances();
+    state.dialog = { type: 'compare', a: v[0]?.id, b: v[1]?.id, result: null };
+    renderOverlay(); runCompare();
+  },
+
   // ---------- 0.7 ----------
-  pickInstance: (d) => { state.selectedId = d.id; if (state.view !== 'home') go('home'); else render(); },
+  pickInstance: (d) => {
+    const same = state.selectedId === d.id && state.view === 'home';
+    const apply = () => { state.selectedId = d.id; if (state.view !== 'home') go('home'); else { lastView = null; render(); } };
+    if (same) return apply();
+    portal(apply);
+  },
+  surpriseTheme: () => {
+    const n = Math.floor(Math.random() * 900 + 100);
+    state.dialog = { type: 'themeEditor', id: '', name: t('dream.name', { n }), ...dreamTheme() };
+    applyAppearance(state.settings, state.dialog);
+    renderOverlay();
+  },
   setRepeat: (d) => { state.settings.musicRepeat = d.v; saveSettings(); render(); },
   setSleep: (d) => {
     const m = Number(d.m);
@@ -3651,7 +4121,7 @@ const actions = {
   toggleOn: (d) => {
     // Настройки, которые по умолчанию включены (undefined = включено)
     state.settings[d.key] = state.settings[d.key] === false;
-    render(); saveSettings();
+    applySettings(); render(); saveSettings();
   },
   setAfterClose: (d) => { state.settings.afterGameClose = d.v; render(); saveSettings(); },
 
@@ -3669,6 +4139,8 @@ const changes = {
   setLanguage: (value) => { state.settings.language = value; applySettings(); render(); saveSettings(); },
   setModSort: (value) => { state.modSort = value; render(); },
   miniSelect: (value) => { state.selectedId = value; render(); },
+  cmpA: (value) => { state.dialog.a = value; runCompare(); },
+  cmpB: (value) => { state.dialog.b = value; runCompare(); },
   setTarget: (value) => { state.res.targetId = value; state.res.results = null; runSearch(); },
 };
 
@@ -3711,6 +4183,7 @@ document.addEventListener('input', (ev) => {
   if ('filterMods' in el.dataset) filterModRows();
   if ('vol' in el.dataset) { audio.volume = Math.min(1, Number(el.value) / 100); el.style.setProperty('--p', el.value + '%'); }
   if ('palette' in el.dataset && state.palette) { state.palette.sel = 0; $('#pal-list').innerHTML = paletteListHtml(); }
+  if ('wikiSearch' in el.dataset) { clearTimeout(wikiTimer); wikiTimer = setTimeout(runWikiSearch, 400); }
   if ('logSearch' in el.dataset) { const v = $('#log-view'); if (v) v.innerHTML = logLinesHtml(currentLogText()); }
   if ('search' in el.dataset) {
     clearTimeout(searchTimer);

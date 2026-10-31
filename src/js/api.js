@@ -63,6 +63,16 @@ export const api = {
   gameLogs: (id) => call('game_logs', { id }),
   setMini: (on) => call('set_mini', { on }),
   importPack: (path) => call('import_pack', { path: path || null }),
+  undoEvent: (id, time, restore) => call('undo_event', { id, time, restore }),
+  listSnapshots: (id) => call('list_snapshots', { id }),
+  makeSnapshot: (id, label, auto) => call('make_snapshot', { id, label, auto: !!auto }),
+  deleteSnapshot: (id, file) => call('delete_snapshot', { id, file }),
+  restoreSnapshot: (id, file, beforeLabel) => call('restore_snapshot', { id, file, beforeLabel }),
+  listProfiles: (id) => call('list_profiles', { id }),
+  saveProfile: (id, name) => call('save_profile', { id, name }),
+  deleteProfile: (id, name) => call('delete_profile', { id, name }),
+  applyProfile: (id, name) => call('apply_profile', { id, name }),
+  precheck: (id) => call('precheck', { id }),
 
   findPrism: () => call('find_prism_instances'),
   importPrism: (paths) => call('import_prism', { paths }),
@@ -259,6 +269,24 @@ async function mockInvoke(cmd, args = {}) {
     case 'export_theme': return 'C:\\Users\\Мари\\Desktop\\' + args.name + '.spectia-theme.json';
     case 'notify': return null;
     case 'stats_summary': return { sessions: 0, totalSeconds: 0 };
+    case 'undo_event': await sleep(200); return 'iris-1.9.jar';
+    case 'list_snapshots': return store.get('snap-' + args.id, []);
+    case 'make_snapshot': {
+      await sleep(500);
+      const snap = { file: 'snap-' + Date.now() + '.zip', label: args.label, time: Date.now() / 1000, size: 48_000_000, auto: args.auto };
+      store.set('snap-' + args.id, [snap, ...store.get('snap-' + args.id, [])]);
+      return snap;
+    }
+    case 'delete_snapshot': store.set('snap-' + args.id, store.get('snap-' + args.id, []).filter((x) => x.file !== args.file)); return null;
+    case 'restore_snapshot': await sleep(600); return null;
+    case 'list_profiles': return store.get('prof-' + args.id, []);
+    case 'save_profile': {
+      const list = store.get('prof-' + args.id, []).filter((x) => x.name !== args.name).concat({ name: args.name, enabled: [], disabled: [] });
+      store.set('prof-' + args.id, list); return list;
+    }
+    case 'delete_profile': { const list = store.get('prof-' + args.id, []).filter((x) => x.name !== args.name); store.set('prof-' + args.id, list); return list; }
+    case 'apply_profile': await sleep(200); return 2;
+    case 'precheck': return new URLSearchParams(location.search).has('precheck') ? [{ kind: 'wrongLoader', name: 'Create', detail: 'forge' }, { kind: 'memory', name: '140', detail: '6' }] : [];
     case 'stats_sessions': {
       const now = Date.now() / 1000; const day = 86400;
       return [

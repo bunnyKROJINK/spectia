@@ -162,8 +162,18 @@ export function applyAppearance(settings, preview = null) {
   const layer = document.getElementById('bgimg');
   if (layer) {
     const url = bgImg?.path ? (inApp ? fileUrl(bgImg.path) : bgImg.path) : '';
+    const video = /\.(mp4|webm)$/i.test(bgImg?.path || '');
     document.body.classList.toggle('has-bg', !!url);
-    layer.style.backgroundImage = url ? `url("${url}")` : '';
+    layer.style.backgroundImage = url && !video ? `url("${url}")` : '';
+    // Живые обои: видео без звука, по кругу
+    const old = layer.querySelector('video');
+    if (video && url) {
+      if (!old || old.dataset.src !== url) {
+        layer.innerHTML = `<video autoplay muted loop playsinline data-src="${url.replace(/"/g, '&quot;')}" src="${url.replace(/"/g, '&quot;')}"></video>`;
+      }
+    } else if (old) {
+      layer.innerHTML = '';
+    }
     layer.style.setProperty('--bg-blur', (bgImg?.blur ?? 8) + 'px');
     layer.style.setProperty('--bg-dim', String((bgImg?.dim ?? 65) / 100));
   }
