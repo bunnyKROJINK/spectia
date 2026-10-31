@@ -10,10 +10,10 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, OnceLock};
 
 /// Application ID приложения «Spectia» на discord.com/developers (не секрет).
-/// Можно задать при сборке переменной SPECTIA_DISCORD_ID.
+/// Для своей сборки можно задать другой через переменную SPECTIA_DISCORD_ID.
 pub const APP_ID: &str = match option_env!("SPECTIA_DISCORD_ID") {
-    Some(id) => id,
-    None => "",
+    Some(id) if !id.is_empty() => id,
+    _ => "1566078905662701638",
 };
 
 pub enum Msg {
