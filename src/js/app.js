@@ -19,7 +19,7 @@ import { diagnose, crashDescription, lineLevel } from './doctor.js';
 import { ACHIEVEMENTS, artSvg, facts, newlyUnlocked, wrappedYear, wrappedData } from './achievements.js';
 import { matchScore } from './search.js';
 
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.7.1';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
@@ -1182,21 +1182,22 @@ function resultsHtml() {
   } else if (r.results && !r.results.length) {
     results = `<section class="panel empty"><span class="muted">${esc(t('res.nothing'))}</span></section>`;
   } else if (r.results) {
-    results = `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">
-      ${r.results.map((m) => `<article class="panel result clickable" data-action="openProject" data-pid="${esc(m.id)}" tabindex="0">
-        ${m.icon ? `<img class="thumb" src="${esc(m.icon)}" alt="" loading="lazy">` : `<span class="thumb" style="background:${TINTS[5]}"></span>`}
-        <div class="stack grow" style="gap:6px">
-          <div class="row" style="gap:8px">
-            <h2 class="h2" style="font-size:calc(15px*var(--fs,1))">${esc(m.title)}</h2>
-            <span class="badge">Modrinth</span>
+    results = `<div class="grid res-grid">
+      ${r.results.map((m) => {
+        const cats = (m.categories || []).filter((c) => (CATEGORIES[r.kind] || []).includes(c)).slice(0, 3);
+        return `<article class="panel result clickable" data-action="openProject" data-pid="${esc(m.id)}" tabindex="0">
+        <div class="res-head">
+          ${m.icon ? `<img class="thumb" src="${esc(m.icon)}" alt="" loading="lazy">` : `<span class="thumb" style="background:${TINTS[5]}"></span>`}
+          <div class="stack" style="gap:3px;min-width:0;flex:1">
+            <h2 class="h2 ellipsis" style="font-size:calc(15px*var(--fs,1))">${esc(m.title)}</h2>
+            <span class="small muted ellipsis">${esc(t('res.by', { author: m.author }))} · ${esc(t('res.downloads', { n: new Intl.NumberFormat(document.documentElement.lang, { notation: 'compact', maximumFractionDigits: 1 }).format(m.downloads) }))}</span>
           </div>
-          <span class="small muted">${esc(t('res.by', { author: m.author }))} · ${esc(t('res.downloads', { n: formatNumber(m.downloads) }))}</span>
-          <p class="note" style="line-height:1.45">${esc(m.description)}</p>
-          ${(m.categories || []).filter((c) => (CATEGORIES[r.kind] || []).includes(c)).slice(0, 3).length
-            ? `<span class="row" style="gap:4px">${m.categories.filter((c) => (CATEGORIES[r.kind] || []).includes(c)).slice(0, 3).map((c) => `<span class="badge">${esc(t('cat.' + c))}</span>`).join('')}</span>` : ''}
+          ${installButton(m)}
         </div>
-        ${installButton(m)}
-      </article>`).join('')}
+        <p class="note res-desc">${esc(m.description)}</p>
+        ${cats.length ? `<span class="row" style="gap:4px">${cats.map((c) => `<span class="badge">${esc(t('cat.' + c))}</span>`).join('')}</span>` : ''}
+      </article>`;
+      }).join('')}
     </div>`;
   }
   return results;
@@ -2608,10 +2609,29 @@ function playTrack(track) {
   if (!track) return;
   if (!inApp || !track.path) return toast(t('music.previewOnly'));
   state.music.current = track;
-  audio.src = fileUrl(track.path);
   audio.volume = Math.min(1, (state.settings.musicVolume ?? 70) / 100);
-  audio.play().catch(() => toast(t('music.cantPlay'), true));
+  loadTrackSrc(track).then(() => audio.play()).catch(() => toast(t('music.cantPlay'), true));
   refreshPlayer();
+}
+
+/**
+ * Загружаем трек целиком в память и играем оттуда: так перемотка работает всегда,
+ * даже если файл открыт через особый адрес приложения.
+ */
+let blobUrl = '';
+async function loadTrackSrc(track) {
+  const url = fileUrl(track.path);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(String(res.status));
+    const blob = await res.blob();
+    if (state.music.current?.key !== track.key) return;
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+    blobUrl = URL.createObjectURL(blob);
+    audio.src = blobUrl;
+  } catch {
+    audio.src = url;
+  }
 }
 
 function nextTrack() {
@@ -2735,7 +2755,7 @@ async function startMenuMusic() {
   state.music.group = fav.size ? 'fav' : 'all';
   const track = pool[Math.floor(Math.random() * pool.length)];
   state.music.current = track;
-  audio.src = fileUrl(track.path);
+  await loadTrackSrc(track);
   audio.volume = Math.min(1, (state.settings.musicVolume ?? 70) / 100);
   // Если система не даёт играть звук без нажатия — начнём при первом клике
   audio.play().catch(() => document.addEventListener('pointerdown', () => audio.play().catch(() => {}), { once: true }));
@@ -3666,6 +3686,12 @@ document.addEventListener('click', (ev) => {
 
 document.addEventListener('input', (ev) => {
   const el = ev.target;
+  if ('seek' in el.dataset) {
+    if (audio.duration) audio.currentTime = (Number(el.value) / 1000) * audio.duration;
+    el.style.setProperty('--p', Number(el.value) / 10 + '%');
+    const p = $('#mu-pos'); if (p) p.textContent = fmtTime(audio.currentTime);
+    return;
+  }
   if (!el.dataset.bind) return;
   const value = 'number' in el.dataset ? Number(el.value) / Number(el.dataset.scale || 1) : el.value;
   setPath(el.dataset.bind, value);
@@ -3683,10 +3709,6 @@ document.addEventListener('input', (ev) => {
     if (low !== !!d.lowContrast) { d.lowContrast = low; renderOverlay(); }
   }
   if ('filterMods' in el.dataset) filterModRows();
-  if ('seek' in el.dataset && audio.duration) {
-    audio.currentTime = (Number(el.value) / 1000) * audio.duration;
-    el.style.setProperty('--p', Number(el.value) / 10 + '%');
-  }
   if ('vol' in el.dataset) { audio.volume = Math.min(1, Number(el.value) / 100); el.style.setProperty('--p', el.value + '%'); }
   if ('palette' in el.dataset && state.palette) { state.palette.sel = 0; $('#pal-list').innerHTML = paletteListHtml(); }
   if ('logSearch' in el.dataset) { const v = $('#log-view'); if (v) v.innerHTML = logLinesHtml(currentLogText()); }

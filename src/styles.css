@@ -599,6 +599,14 @@ body.is-mini .rail, body.is-mini .sidebar { display: none; }
 .track-row .track:hover { background: transparent; }
 .scene { position: absolute; inset: 0; width: 100%; height: 100%; }
 
+
+/* Каталог: компактные карточки — кнопки в шапке, описание во всю ширину и не длиннее трёх строк */
+.res-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.result { flex-direction: column; align-items: stretch; gap: 10px; padding: 14px; }
+.res-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.res-head .thumb { width: 48px; height: 48px; }
+.res-desc { line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
 /* «Уменьшить анимации» в настройках, или такая же настройка в Windows */
 .reduce-motion *, .reduce-motion *::before, .reduce-motion *::after { animation: none !important; transition: none !important; }
 @media (prefers-reduced-motion: reduce) {
