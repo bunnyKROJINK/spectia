@@ -1,0 +1,41 @@
+
+added 2 packages, and audited 3 packages in 3s
+
+1 package is looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+
+> spectia@1.0.0 build
+> tauri build
+
+        Info Looking up installed tauri packages to check mismatched versions...
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 524 packages to highest compatible versions
+[1m[92m      Adding[0m base64 v0.22.1 [1m[93m(available: v0.23.1)[0m
+[1m[92m      Adding[0m generic-array v0.14.7 [1m[93m(available: v0.14.9)[0m
+[1m[92m      Adding[0m reqwest v0.12.28 [1m[93m(available: v0.13.5)[0m
+[1m[92m      Adding[0m sha2 v0.10.9 [1m[93m(available: v0.11.1)[0m
+[1m[92m      Adding[0m toml v0.8.2 [1m[93m(available: v0.8.23)[0m
+[1m[92m      Adding[0m toml_datetime v0.6.3 [1m[93m(available: v0.6.11)[0m
+[1m[92m      Adding[0m toml_edit v0.20.2 [1m[93m(available: v0.20.7)[0m
+[1m[92m      Adding[0m zip v2.6.1 [1m[93m(available: v9.2.0)[0m
+[1m[92m   Compiling[0m spectia v1.0.0 (D:\a\spectia\spectia\src-tauri)
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 3m 30s
+       Built application at: D:\a\spectia\spectia\src-tauri\target\release\spectia.exe
+        Info Patching D:\a\spectia\spectia\src-tauri\target\release\spectia.exe with bundle type information: nsis
+        Info Verifying NSIS package
+ Downloading https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip
+        Info validating hash
+        Info extracting NSIS
+ Downloading https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll
+        Info validating hash
+        Info Target: x64
+     Running makensis to produce D:\a\spectia\spectia\src-tauri\target\release\bundle\nsis\Spectia_1.0.0_x64-setup.exe
+    Finished 1 bundle at:
+        D:\a\spectia\spectia\src-tauri\target\release\bundle\nsis\Spectia_1.0.0_x64-setup.exe (2.70 MiB)
+
+    Finished 1 updater signature at:
+        D:\a\spectia\spectia\src-tauri\target\release\bundle\nsis\Spectia_1.0.0_x64-setup.exe.sig
+
+latest.json готов для версии 1.0.0
