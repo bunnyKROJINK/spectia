@@ -6,7 +6,7 @@
 
 <p align="center">
   Красивый и лёгкий лаунчер для Minecraft: Java Edition.<br>
-  Шесть тем оформления, сборки с модами, поиск по Modrinth и CurseForge.
+  Десять тем и свои темы, сборки с модами, поиск по Modrinth, скины и перенос из Prism.
 </p>
 
 <p align="center"><b>Русский</b> · <a href="#english">English</a></p>
@@ -15,7 +15,7 @@
 
 ## Что уже умеет
 
-- [x] Тёмные и светлые темы: Ночь, Изумруд, Сакура, Рубин, Светлая, Полночь
+- [x] Десять тем (Ночь, Изумруд, Сакура, Рубин, Аметист, Космос, Океан, Хэллоуин, Светлая, Полночь) и редактор своих тем
 - [x] Русский и английский язык интерфейса
 - [x] Создание сборок: версия Minecraft прямо с серверов Mojang, загрузчик Fabric / Forge / NeoForge / Quilt
 - [x] Настройки каждой сборки: память, Java, окно, автовход на сервер и раздел «Для продвинутых»
@@ -26,16 +26,23 @@
 - [x] Fabric, Quilt, Forge и NeoForge (включая старые версии вроде 1.12.2)
 - [x] Список модов: включить, выключить, удалить, перетащить в окно
 - [x] Редактирование и дублирование сборок, время в игре
-- [ ] Вход через Microsoft
+- [x] Вход через Microsoft (заработает после одобрения Mojang)
 - [x] Установка модов, текстурпаков, шейдеров и сборок с Modrinth в один клик (с зависимостями)
 - [x] Обновление модов по кнопке
 - [x] Экспорт и импорт сборок в .mrpack
 - [x] Миры, скриншоты, своя обложка сборки
 - [x] Тематические темы: Космос, Океан, Хэллоуин
 - [ ] CurseForge (ждём ключ API) и понятное окно для модов, которые можно скачать только с сайта
-- [ ] Импорт сборок CurseForge и Prism / MultiMC
-- [ ] Скины
-- [ ] Миры: датапаки в один клик
+- [x] Перенос сборок из Prism Launcher
+- [x] Скины: предпросмотр, своя коллекция, плащи
+- [x] Датапаки в выбранный мир
+- [x] Резервные копии миров после игры
+- [x] Избранное, папки, теги, архив и заметки для сборок
+- [x] Фон-картинка, акцентный цвет, масштаб, размер текста, скругления, плотность
+- [x] Колокольчик и уведомления Windows
+- [ ] Импорт сборок CurseForge и Prism-zip
+
+Что планируется дальше — в [ROADMAP.md](ROADMAP.md).
 
 ## Как скачать
 
@@ -49,12 +56,19 @@ Spectia написан на [Tauri 2](https://tauri.app): интерфейс —
 src/                 интерфейс
   js/app.js          экраны и кнопки
   js/themes.js       темы оформления
+  js/appearance.js   свои темы, фон, масштаб
+  js/skinview.js     плоский предпросмотр скина
+  js/sound.js        колокольчик
   i18n/ru.js, en.js  переводы
 src-tauri/           Rust-часть
   src/instances.rs   сборки
   src/settings.rs    настройки
   src/versions.rs    список версий Minecraft
-  src/accounts.rs    вход через Ely.by
+  src/accounts.rs    аккаунты Ely.by и Microsoft
+  src/microsoft.rs   вход через Microsoft (окно браузера)
+  src/skins.rs       скины и плащи
+  src/prism.rs       перенос из Prism Launcher
+  src/stats.rs       статистика игровых сессий (только на компьютере)
   src/game.rs        файлы игры: библиотеки, ассеты, аргументы
   src/java.rs        Java от Mojang
   src/launch.rs      запуск игры
@@ -62,7 +76,7 @@ src-tauri/           Rust-часть
   src/mods.rs        список модов сборки
   src/modrinth.rs    установка с Modrinth и обновления
   src/mrpack.rs      экспорт и импорт .mrpack
-  src/content.rs     миры, скриншоты, обложки
+  src/content.rs     миры, датапаки, копии миров, скриншоты, обложки
   src/updater.rs     автообновление
 ```
 
@@ -96,8 +110,8 @@ Spectia не является официальным продуктом Minecraf
 
 ## English
 
-Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. It features six themes, Russian and English UI, instance management with per-instance settings, Modrinth search, Ely.by sign-in, game launching with automatic Java download (vanilla, Fabric, Quilt, Forge, NeoForge), a per-instance mod manager with one-click Modrinth installs and update checks, .mrpack export/import, worlds and screenshots, themed themes, and self-updates. Microsoft sign-in, one-click mod installs and CurseForge support are in progress.
+Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. Ten themes plus a custom theme editor, background pictures and accent colors; Russian and English UI; instances with favorites, folders, tags, archive and notes; Modrinth search and one-click installs (mods, shaders, resource packs, datapacks into a chosen world, modpacks); Ely.by and Microsoft sign-in (Microsoft pending Mojang approval); skin preview, collection and capes; moving instances from Prism Launcher; world backups; vanilla, Fabric, Quilt, Forge and NeoForge with automatic Java; .mrpack export/import and self-updates. See ROADMAP.md for what's next.
 
-Build: install Rust and Node.js, then run `npm install` and `npm run build`.
+Build: install Rust and Node.js, then run `npm install` and `npm run build`. For Microsoft sign-in, set the `SPECTIA_MS_CLIENT_ID` environment variable to your Azure app's client ID at build time.
 
 Licensed under GPL-3.0. Not an official Minecraft product. Not affiliated with Mojang, Microsoft or Prism Launcher.

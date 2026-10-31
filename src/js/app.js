@@ -9,12 +9,15 @@
 import { api, win, openUrl, inApp, on, onFileDrop, fileUrl } from './api.js';
 import { renderDecorations } from './decorations.js';
 import { t, setLang, LANGS, formatNumber } from './i18n.js';
-import { THEMES, THEME_ORDER, TINTS, applyTheme } from './themes.js';
+import { THEMES, THEME_ORDER, TINTS } from './themes.js';
+import { applyAppearance, applyZoom, resolveTheme, themeFromColors, lum as lumOf } from './appearance.js';
+import { chime } from './sound.js';
+import { skinCanvas, paintSkins } from './skinview.js';
 import { icon, heroArt } from './icons.js';
 import { searchModrinth } from './modrinth.js';
 import { matchScore } from './search.js';
 
-const APP_VERSION = '0.4.1';
+const APP_VERSION = '0.5.0';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
@@ -49,7 +52,14 @@ const state = {
   dataDir: '',             // папка с данными лаунчера (для картинок обложек)
   importing: null,         // { done, total } пока импортируется .mrpack
   res: { query: '', kind: 'mod', source: 'modrinth', results: null, loading: false, error: false, targetId: null, installing: {}, installed: new Set(), installedFor: null },
-  skins: { model: 'classic', selected: 0 },
+  skins: { account: null, accountFor: null, library: null, pick: null, busy: false },
+  tagDraft: '',
+  instFilter: 'all',       // all | fav | archive | folder:… | tag:…
+  msReady: false,          // настроен ли вход через Microsoft в этой сборке лаунчера
+  msBusy: false,
+  setTab: 'look',          // вкладка настроек
+  dp: { world: null, list: null }, // датапаки раскрытого мира
+  backups: { id: null, list: null },
   accounts: [],
   ely: { username: '', password: '', totp: '', need2fa: false, busy: false, error: '' },
   running: new Set(),      // id запущенных сборок
@@ -67,7 +77,19 @@ const $ = (sel) => document.querySelector(sel);
 /** Экранирует текст, чтобы название вроде <b> не сломало страницу. */
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const selected = () => state.instances.find((i) => i.id === state.selectedId) || state.instances[0] || null;
+const selected = () => state.instances.find((i) => i.id === state.selectedId) || visibleInstances()[0] || state.instances[0] || null;
+/** Сборки без архива, избранные — первыми */
+const visibleInstances = () => state.instances.filter((i) => !i.archived).sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0));
+
+// Цветные теги: цвет зависит от текста тега, поэтому один и тот же тег всегда одного цвета
+const TAG_COLORS = ['#FF8CC6', '#8B9CFF', '#4ADE9A', '#FF9A3C', '#FF6B78', '#4FD8E8', '#B78CFF', '#FFD166'];
+function tagColor(tag) {
+  let h = 0;
+  for (const c of String(tag).toLowerCase()) h = (h * 31 + c.codePointAt(0)) >>> 0;
+  return TAG_COLORS[h % TAG_COLORS.length];
+}
+const tagChip = (tag, removable = false) => `<span class="tag" style="--tag:${tagColor(tag)}">${esc(tag)}${removable
+  ? `<button type="button" data-action="removeTag" data-tag="${esc(tag)}" aria-label="${esc(t('org.removeTag', { tag }))}">×</button>` : ''}</span>`;
 const activeAccount = () => state.accounts.find((a) => a.active) || null;
 const loaderLabel = (id) => (id === 'vanilla' ? t('loader.none') : t('loader.' + id));
 const tint = (n) => TINTS[n] || TINTS[0];
@@ -118,9 +140,17 @@ async function saveSettings() {
 
 function applySettings() {
   setLang(state.settings.language);
-  applyTheme(state.settings.theme);
-  renderDecorations(THEMES[state.settings.theme]?.deco, state.settings.showDecorations !== false);
+  const theme = applyAppearance(state.settings);
+  renderDecorations(theme.deco, state.settings.showDecorations !== false);
   document.documentElement.classList.toggle('reduce-motion', !!state.settings.reduceMotion);
+  applyZoom(state.settings.uiScale || 1);
+}
+
+/** Колокольчик и уведомление Windows (если лаунчер сейчас не в фокусе). */
+function celebrate(kind, title, body) {
+  const s = state.settings || {};
+  if (s.sound !== false) chime(kind, (s.soundVolume ?? 60) / 100);
+  if (s.notifications !== false && !document.hasFocus()) api.notify(title, body).catch(() => {});
 }
 
 async function loadInstances() {
@@ -237,9 +267,9 @@ function viewHome() {
         </div>
       </div>
       <div class="grid grid-cards">
-        ${state.instances.slice(0, 8).map((i) => `
+        ${visibleInstances().slice(0, 8).map((i) => `
           <button class="card" data-action="select" data-id="${esc(i.id)}" data-ctx="${esc(i.id)}" ${pressed(i.id === cur.id)}>
-            <span class="cover" style="${coverBg(i)}"></span>
+            <span class="cover" style="${coverBg(i)}"></span>${i.favorite ? `<span class="fav" aria-label="${esc(t('org.favorite'))}">${icon.star(16).replace('fill="none"', 'fill="currentColor"')}</span>` : ''}
             <span class="card-title ellipsis" style="max-width:100%">${esc(i.name)}</span>
             <span class="small muted">${esc(i.gameVersion)} · ${esc(loaderLabel(i.loader))}</span>
           </button>`).join('')}
@@ -259,35 +289,79 @@ function findBlock() {
   </section>`;
 }
 
-function viewInstances() {
-  const rows = state.instances.map((i) => `
-    <div class="list-row" data-ctx="${esc(i.id)}">
+function instanceRow(i) {
+  return `
+    <div class="list-row ${i.archived ? 'archived' : ''}" data-ctx="${esc(i.id)}">
+      <button class="icon-btn star" style="width:36px;height:36px;border:0;background:transparent" data-action="toggleFavorite" data-id="${esc(i.id)}" ${pressed(i.favorite)}
+        aria-label="${esc(t(i.favorite ? 'org.unfavorite' : 'org.favorite'))}" title="${esc(t(i.favorite ? 'org.unfavorite' : 'org.favorite'))}">${icon.star()}</button>
       <span class="thumb" style="${coverBg(i)}"></span>
-      <div class="stack grow" style="gap:3px">
-        <span class="card-title ellipsis">${esc(i.name)}</span>
+      <div class="stack grow" style="gap:4px">
+        <span class="row" style="gap:8px"><span class="card-title ellipsis">${esc(i.name)}</span>${(i.tags || []).map((g) => tagChip(g)).join('')}</span>
         <span class="small muted">Minecraft ${esc(i.gameVersion)} · ${esc(loaderLabel(i.loader))} · ${esc(formatPlayTime(i.playTimeSecs))}</span>
+        ${i.notes ? `<span class="small muted ellipsis" style="max-width:560px;opacity:.85">${icon.note(12)} ${esc(i.notes.split('\n')[0])}</span>` : ''}
       </div>
       <div class="row" style="gap:8px">
         <button class="icon-btn" data-action="openInstance" data-id="${esc(i.id)}" aria-label="${esc(t('home.instanceSettings'))}" title="${esc(t('home.instanceSettings'))}">${icon.gear(18)}</button>
         <button class="icon-btn" data-action="openFolder" data-id="${esc(i.id)}" aria-label="${esc(t('inst.openFolder'))}" title="${esc(t('inst.openFolder'))}">${icon.folder()}</button>
-        ${state.running.has(i.id)
-          ? `<button class="btn" style="height:40px" data-action="stop" data-id="${esc(i.id)}">${esc(t('launch.stop'))}</button>`
-          : `<button class="btn accent" style="height:40px" data-action="playInstance" data-id="${esc(i.id)}" ${state.progress[i.id] ? 'disabled' : ''}>${esc(t('inst.play'))}</button>`}
+        ${i.archived
+          ? `<button class="btn" style="height:40px" data-action="toggleArchive" data-id="${esc(i.id)}">${icon.restore()}<span>${esc(t('org.unarchive'))}</span></button>`
+          : state.running.has(i.id)
+            ? `<button class="btn" style="height:40px" data-action="stop" data-id="${esc(i.id)}">${esc(t('launch.stop'))}</button>`
+            : `<button class="btn accent" style="height:40px" data-action="playInstance" data-id="${esc(i.id)}" ${state.progress[i.id] ? 'disabled' : ''}>${esc(t('inst.play'))}</button>`}
       </div>
-    </div>`).join('');
+    </div>`;
+}
+
+const allFolders = () => [...new Set(state.instances.map((i) => (i.folder || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+const allTags = () => [...new Set(state.instances.flatMap((i) => i.tags || []))].sort((a, b) => a.localeCompare(b));
+
+function viewInstances() {
+  const f = state.instFilter;
+  const folders = allFolders();
+  const tags = allTags();
+  const archived = state.instances.filter((i) => i.archived);
+  let list = visibleInstances();
+  if (f === 'fav') list = list.filter((i) => i.favorite);
+  else if (f === 'archive') list = archived;
+  else if (f.startsWith('folder:')) list = list.filter((i) => (i.folder || '').trim() === f.slice(7));
+  else if (f.startsWith('tag:')) list = list.filter((i) => (i.tags || []).includes(f.slice(4)));
+
+  // В «Все» раскладываем по папкам; сборки без папки — сверху
+  let rows;
+  if (f === 'all' && folders.length) {
+    const groups = [['', list.filter((i) => !(i.folder || '').trim())], ...folders.map((n) => [n, list.filter((i) => (i.folder || '').trim() === n)])];
+    rows = groups.filter(([, l]) => l.length).map(([n, l]) => (n ? `<div class="folder-head">${icon.folder(14)}<span>${esc(n)}</span></div>` : '') + l.map(instanceRow).join('')).join('');
+  } else {
+    rows = list.map(instanceRow).join('');
+  }
+
+  const pill = (id, label, ic = '') => `<button class="pill row" style="gap:6px;flex-wrap:nowrap" data-action="setInstFilter" data-f="${esc(id)}" ${pressed(f === id)}>${ic}<span>${esc(label)}</span></button>`;
+  const filters = state.instances.length ? `<div class="row" style="gap:6px" role="group" aria-label="${esc(t('org.filter'))}">
+      ${pill('all', t('org.all'))}
+      ${state.instances.some((i) => i.favorite) ? pill('fav', t('org.favorites'), icon.star(14)) : ''}
+      ${folders.map((n) => pill('folder:' + n, n, icon.folder(14))).join('')}
+      ${tags.map((g) => `<button class="pill" data-action="setInstFilter" data-f="${esc('tag:' + g)}" ${pressed(f === 'tag:' + g)} style="border-color:${tagColor(g)}66">${esc(g)}</button>`).join('')}
+      ${archived.length ? pill('archive', t('org.archive', { n: archived.length }), icon.archive(14)) : ''}
+    </div>` : '';
 
   return `<div class="view">
     <div class="row between">
       <h1 class="page-title">${esc(t('inst.title'))}</h1>
       <div class="row" style="gap:8px">
+        <button class="btn" data-action="openPrism">${icon.move()}<span>${esc(t('prism.button'))}</span></button>
         <button class="btn" data-action="importPack">${icon.upload(16)}<span>${esc(t('inst.import'))}</span></button>
         <button class="btn accent" data-action="openCreate">${esc(t('home.newInstance'))}</button>
       </div>
     </div>
+    ${filters}
     ${state.instances.length
-      ? `<section class="panel list">${rows}</section>`
+      ? list.length
+        ? `<section class="panel list">${rows}</section>`
+        : `<section class="panel empty"><span class="muted">${esc(t(f === 'archive' ? 'org.archiveEmpty' : 'org.filterEmpty'))}</span></section>`
       : `<section class="panel empty">${icon.box()}<h2 class="h2">${esc(t('inst.empty'))}</h2>
-           <button class="btn accent" data-action="openCreate">${esc(t('home.newInstance'))}</button></section>`}
+           <p class="note">${esc(t('prism.emptyHint'))}</p>
+           <div class="row"><button class="btn" data-action="openPrism">${icon.move()}<span>${esc(t('prism.button'))}</span></button>
+           <button class="btn accent" data-action="openCreate">${esc(t('home.newInstance'))}</button></div></section>`}
   </div>`;
 }
 
@@ -446,7 +520,7 @@ function viewInstance() {
       <span class="thumb" style="width:44px;height:44px;${coverBg(e)}"></span>
       <div class="stack grow" style="gap:2px;min-width:0">
         <span class="small muted">${esc(t('is.title'))}</span>
-        <h1 class="ellipsis" style="font-size:24px;font-weight:700">${esc(e.name || '…')}</h1>
+        <h1 class="ellipsis" style="font-size:calc(24px*var(--fs,1));font-weight:700">${esc(e.name || '…')}</h1>
       </div>
       <button class="icon-btn" data-action="openFolder" data-id="${esc(e.id)}" aria-label="${esc(t('is.openFolder'))}" title="${esc(t('is.openFolder'))}">${icon.folder()}</button>
     </div>
@@ -498,6 +572,34 @@ function instGeneral(e) {
       ${loaderVersionSelect(e.loader, e.gameVersion, 'edit.loaderVersion', e.loaderVersion)}
     </section>
 
+    <section class="panel pad stack" style="gap:14px">
+      <h2 class="h2">${esc(t('org.title'))}</h2>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
+        <div class="field">
+          <label for="efolder" class="label">${esc(t('org.folder'))}</label>
+          <input id="efolder" class="input" maxlength="40" list="folders-list" placeholder="${esc(t('org.folderPlaceholder'))}" value="${esc(e.folder || '')}" data-bind="edit.folder">
+          <datalist id="folders-list">${allFolders().map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
+        </div>
+        <form class="field" data-submit="addTag">
+          <label for="etag" class="label">${esc(t('org.tags'))}</label>
+          <div class="row" style="gap:6px;flex-wrap:nowrap">
+            <input id="etag" class="input" maxlength="24" list="tags-list" placeholder="${esc(t('org.tagPlaceholder'))}" value="${esc(state.tagDraft || '')}" data-bind="tagDraft">
+            <datalist id="tags-list">${allTags().filter((g) => !(e.tags || []).includes(g)).map((g) => `<option value="${esc(g)}">`).join('')}</datalist>
+            <button type="submit" class="btn sm">${esc(t('org.addTag'))}</button>
+          </div>
+          <div class="row" style="gap:6px">${(e.tags || []).map((g) => tagChip(g, true)).join('') || `<span class="small muted">${esc(t('org.noTags'))}</span>`}</div>
+        </form>
+      </div>
+      <div class="field">
+        <label for="enotes" class="label">${esc(t('org.notes'))}</label>
+        <textarea id="enotes" class="input" rows="3" maxlength="2000" placeholder="${esc(t('org.notesPlaceholder'))}" data-bind="edit.notes">${esc(e.notes || '')}</textarea>
+      </div>
+      <div class="grid grid-2" style="gap:4px 16px">
+        ${switchRow('toggleEdit', 'favorite', e.favorite, t('org.favorite'))}
+        ${switchRow('toggleEdit', 'archived', e.archived, t('org.archived'), t('org.archivedSub'))}
+      </div>
+    </section>
+
     <section class="panel pad row between" style="gap:14px">
       <p class="note" style="flex:1 1 320px">${esc(t('is.shareNote'))}</p>
       <button class="btn soft" data-action="share" data-id="${esc(e.id)}">${icon.upload(16)}<span>${esc(t('is.share'))}</span></button>
@@ -541,7 +643,7 @@ function instMods(e) {
     ${list.map((x) => `<div class="list-row mod-row ${x.enabled ? '' : 'off'}" data-name="${esc(x.name)}" data-file="${esc(x.file)}" ${modMatches(x) ? '' : 'hidden'}>
       <span class="thumb mod-icon" aria-hidden="true">${esc((x.name || '?').charAt(0).toUpperCase())}</span>
       <div class="stack grow" style="gap:2px">
-        <span class="row" style="gap:8px"><span class="card-title" style="font-size:14px">${esc(x.name)}</span>${x.version ? `<span class="badge">${esc(x.version)}</span>` : ''}</span>
+        <span class="row" style="gap:8px"><span class="card-title" style="font-size:calc(14px*var(--fs,1))">${esc(x.name)}</span>${x.version ? `<span class="badge">${esc(x.version)}</span>` : ''}</span>
         ${x.description ? `<span class="small muted ellipsis" style="max-width:560px">${esc(x.description.split('\n')[0])}</span>` : ''}
         <span class="small muted ellipsis" style="opacity:.75">${esc(x.file)}${x.authors ? ' · ' + esc(t('mods.by', { who: x.authors })) : ''}</span>
       </div>
@@ -557,21 +659,73 @@ function instWorlds(e) {
     loadWorlds(e.id);
     return `<div class="row" style="padding:20px"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
   }
-  if (!w.list.length) {
-    return `<section class="panel empty">${icon.box()}<h2 class="h2">${esc(t('worlds.empty'))}</h2><p class="note">${esc(t('worlds.emptySub'))}</p></section>`;
-  }
+  const b = state.backups;
+  if (b.id !== e.id || b.list === null) loadBackups(e.id);
   const date = (secs) => new Date(secs * 1000).toLocaleString(document.documentElement.lang, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
-  return `<section class="panel list">${w.list.map((x) => `
-    <div class="list-row">
-      ${x.icon && inApp ? `<img class="thumb" src="${esc(fileUrl(x.icon))}" alt="" style="image-rendering:pixelated">` : `<span class="thumb mod-icon" aria-hidden="true">${esc(x.folder.charAt(0).toUpperCase())}</span>`}
-      <div class="stack grow" style="gap:2px">
-        <span class="card-title" style="font-size:15px">${esc(x.folder)}</span>
-        <span class="small muted">${esc(t('worlds.played', { date: date(x.lastPlayed) }))} · ${esc(t('unit.mb', { n: (x.size / 1048576).toFixed(1) }))}</span>
-      </div>
-      <button class="btn sm" data-action="copyWorld" data-folder="${esc(x.folder)}">${icon.copy()}<span>${esc(t('worlds.copy'))}</span></button>
-      <button class="icon-btn" data-action="openWorld" data-folder="${esc(x.folder)}" aria-label="${esc(t('worlds.open'))}" title="${esc(t('worlds.open'))}">${icon.folder()}</button>
-      <button class="icon-btn" data-action="askDeleteWorld" data-folder="${esc(x.folder)}" aria-label="${esc(t('worlds.delete'))}" title="${esc(t('worlds.delete'))}">${icon.trash()}</button>
-    </div>`).join('')}</section>`;
+  const mb = (n) => t('unit.mb', { n: (n / 1048576).toFixed(1) });
+
+  const auto = `<section class="panel pad stack" style="gap:4px">
+    ${switchRow('toggleAutoBackup', 'backupWorlds', e.backupWorlds, t('bk.auto'), t('bk.autoSub', { n: state.settings.backupKeep || 5 }))}
+  </section>`;
+
+  const dpBlock = (folder) => {
+    if (state.dp.world !== folder) return '';
+    const list = state.dp.list;
+    const body = list === null
+      ? `<div class="row"><span class="spinner"></span><span class="muted small">${esc(t('common.loading'))}</span></div>`
+      : list.length
+        ? list.map((d) => `<div class="row between"><span class="small">${esc(d.file)} <span class="muted">· ${esc(mb(d.size))}</span></span>
+            <button class="btn sm" data-action="deleteDatapack" data-file="${esc(d.file)}">${icon.trash()}<span>${esc(t('common.delete'))}</span></button></div>`).join('')
+        : `<span class="small muted">${esc(t('dp.none'))}</span>`;
+    return `<div class="datapacks">${body}
+      <div class="row"><button class="btn sm soft" data-action="findDatapacks">${esc(t('dp.find'))}</button></div></div>`;
+  };
+
+  const worlds = w.list.length
+    ? `<section class="panel list">${w.list.map((x) => `
+      <div class="list-row">
+        ${x.icon && inApp ? `<img class="thumb" src="${esc(fileUrl(x.icon))}" alt="" style="image-rendering:pixelated">` : `<span class="thumb mod-icon" aria-hidden="true">${esc(x.folder.charAt(0).toUpperCase())}</span>`}
+        <div class="stack grow" style="gap:2px">
+          <span class="card-title" style="font-size:calc(15px*var(--fs,1))">${esc(x.folder)}</span>
+          <span class="small muted">${esc(t('worlds.played', { date: date(x.lastPlayed) }))} · ${esc(mb(x.size))}</span>
+        </div>
+        <button class="btn sm" data-action="toggleDatapacks" data-folder="${esc(x.folder)}" aria-expanded="${state.dp.world === x.folder}">${esc(t('dp.title'))}</button>
+        <button class="btn sm" data-action="makeBackup" data-folder="${esc(x.folder)}" ${state.backups.busy === x.folder ? 'disabled' : ''}>${state.backups.busy === x.folder ? '<span class="spinner"></span>' : icon.archive()}<span>${esc(t('bk.make'))}</span></button>
+        <button class="icon-btn" data-action="copyWorld" data-folder="${esc(x.folder)}" aria-label="${esc(t('worlds.copy'))}" title="${esc(t('worlds.copy'))}">${icon.copy()}</button>
+        <button class="icon-btn" data-action="openWorld" data-folder="${esc(x.folder)}" aria-label="${esc(t('worlds.open'))}" title="${esc(t('worlds.open'))}">${icon.folder()}</button>
+        <button class="icon-btn" data-action="askDeleteWorld" data-folder="${esc(x.folder)}" aria-label="${esc(t('worlds.delete'))}" title="${esc(t('worlds.delete'))}">${icon.trash()}</button>
+        ${dpBlock(x.folder)}
+      </div>`).join('')}</section>`
+    : `<section class="panel empty">${icon.box()}<h2 class="h2">${esc(t('worlds.empty'))}</h2><p class="note">${esc(t('worlds.emptySub'))}</p></section>`;
+
+  const backups = b.list && b.list.length ? `<h2 class="h2" style="margin:6px 0 0 4px">${esc(t('bk.title'))}</h2>
+    <section class="panel list">${b.list.map((x) => `
+      <div class="list-row">
+        <span class="thumb mod-icon" aria-hidden="true">${icon.archive(20)}</span>
+        <div class="stack grow" style="gap:2px">
+          <span class="card-title" style="font-size:calc(14px*var(--fs,1))">${esc(x.world)}</span>
+          <span class="small muted">${esc(date(x.time))} · ${esc(mb(x.size))}</span>
+        </div>
+        <button class="btn sm" data-action="askRestore" data-file="${esc(x.file)}">${icon.restore()}<span>${esc(t('bk.restore'))}</span></button>
+        <button class="icon-btn" data-action="deleteBackup" data-file="${esc(x.file)}" aria-label="${esc(t('bk.delete'))}" title="${esc(t('bk.delete'))}">${icon.trash()}</button>
+      </div>`).join('')}</section>` : '';
+
+  return auto + worlds + backups;
+}
+
+async function loadBackups(id) {
+  if (state.backups.loading) return;
+  state.backups = { id, list: null, loading: true };
+  try { state.backups.list = await api.listBackups(id); } catch { state.backups.list = []; }
+  state.backups.loading = false;
+  if (state.view === 'instance' && state.instTab === 'worlds') render();
+}
+
+async function loadDatapacks(world) {
+  state.dp = { world, list: null };
+  render();
+  try { state.dp.list = await api.listDatapacks(state.edit.id, world); } catch { state.dp.list = []; }
+  if (state.dp.world === world) render();
 }
 
 function instShots(e) {
@@ -619,7 +773,7 @@ function instLaunch(e) {
     <section class="panel pad stack" style="gap:12px">
       <div class="row between" style="align-items:baseline">
         <h2 class="h2">${esc(t('is.memory'))}</h2>
-        <span id="mem-label" style="font-size:22px;font-weight:700;color:var(--accent-text)">${e.memoryGb} ${esc(t('unit.gb'))}</span>
+        <span id="mem-label" style="font-size:calc(22px*var(--fs,1));font-weight:700;color:var(--accent-text)">${e.memoryGb} ${esc(t('unit.gb'))}</span>
       </div>
       <label for="mem" class="label">${esc(t('is.memoryLabel'))}</label>
       <input id="mem" type="range" min="1" max="16" step="1" value="${e.memoryGb}" data-bind="edit.memoryGb" data-number>
@@ -738,7 +892,7 @@ function resultsHtml() {
         ${m.icon ? `<img class="thumb" src="${esc(m.icon)}" alt="" loading="lazy">` : `<span class="thumb" style="background:${TINTS[5]}"></span>`}
         <div class="stack grow" style="gap:6px">
           <div class="row" style="gap:8px">
-            <h2 class="h2" style="font-size:15px">${esc(m.title)}</h2>
+            <h2 class="h2" style="font-size:calc(15px*var(--fs,1))">${esc(m.title)}</h2>
             <span class="badge">Modrinth</span>
           </div>
           <span class="small muted">${esc(t('res.by', { author: m.author }))} · ${esc(t('res.downloads', { n: formatNumber(m.downloads) }))}</span>
@@ -784,61 +938,96 @@ function viewResources() {
   </div>`;
 }
 
-const SKINS = [
-  { shirt: '#6A5ACD', dark: '#4B3FA0', eye: '#3B5BDB' },
-  { shirt: '#2D9B6E', dark: '#1F6E4E', eye: '#2D7A5E' },
-  { shirt: '#D9579A', dark: '#A33D72', eye: '#8A4FD1' },
-  { shirt: '#C93A4A', dark: '#912A36', eye: '#5A3A2A' },
-  { shirt: '#E0A63A', dark: '#A8792E', eye: '#3B5BDB' },
-];
+async function loadAccountSkin(acc) {
+  const sk = state.skins;
+  sk.accountFor = acc.id;
+  sk.account = 'loading';
+  try { sk.account = await api.accountSkin(acc.id); } catch { sk.account = { image: '', slim: false, capes: [], editable: false, error: true }; }
+  if (state.view === 'skins') render();
+}
 
-function skinSvg(k, slim) {
-  const arm = slim ? 3 : 4;
-  return `<svg width="160" height="320" viewBox="0 0 16 32" shape-rendering="crispEdges" role="img" aria-label="${esc(t('skins.preview'))}">
-    <rect x="4" y="0" width="8" height="8" fill="#C8A07A"/><rect x="4" y="0" width="8" height="2" fill="#3B2A22"/>
-    <rect x="4" y="2" width="1" height="2" fill="#3B2A22"/><rect x="11" y="2" width="1" height="2" fill="#3B2A22"/>
-    <rect x="5" y="4" width="2" height="1" fill="#fff"/><rect x="6" y="4" width="1" height="1" fill="${k.eye}"/>
-    <rect x="9" y="4" width="2" height="1" fill="#fff"/><rect x="9" y="4" width="1" height="1" fill="${k.eye}"/>
-    <rect x="7" y="6" width="2" height="1" fill="#A97E5C"/>
-    <rect x="4" y="8" width="8" height="12" fill="${k.shirt}"/><rect x="7" y="8" width="2" height="3" fill="${k.dark}"/>
-    <rect x="${4 - arm}" y="8" width="${arm}" height="12" fill="${k.dark}"/><rect x="12" y="8" width="${arm}" height="12" fill="${k.dark}"/>
-    <rect x="${4 - arm}" y="17" width="${arm}" height="3" fill="#C8A07A"/><rect x="12" y="17" width="${arm}" height="3" fill="#C8A07A"/>
-    <rect x="4" y="20" width="4" height="12" fill="#2C3354"/><rect x="8" y="20" width="4" height="12" fill="#262C4A"/>
-    <rect x="4" y="30" width="8" height="2" fill="#1A1D2E"/>
-  </svg>`;
+async function loadSkinLibrary() {
+  state.skins.library = 'loading';
+  try { state.skins.library = await api.listSkins(); } catch { state.skins.library = []; }
+  if (state.view === 'skins') render();
+}
+
+function skinStage(image, slim, cape) {
+  return `<div class="skin-stage">
+    ${['front', 'back', 'side'].map((side) => `<figure>${skinCanvas({ image, slim, side, cape, size: 220, label: t('skins.view.' + side) })}
+      <figcaption>${esc(t('skins.view.' + side))}</figcaption></figure>`).join('')}
+  </div>`;
 }
 
 function viewSkins() {
   const sk = state.skins;
+  const acc = activeAccount();
+  if (acc && sk.accountFor !== acc.id) loadAccountSkin(acc);
+  if (sk.library === null) loadSkinLibrary();
+  const lib = Array.isArray(sk.library) ? sk.library : [];
+  const picked = lib.find((k) => k.file === sk.pick) || null;
+  const cur = sk.account && sk.account !== 'loading' ? sk.account : null;
+  const activeCape = cur?.capes?.find((c) => c.active)?.image || '';
+  const isMs = acc?.kind === 'microsoft';
+
+  // Что показываем на большой сцене: выбранный в коллекции скин или текущий скин аккаунта
+  let stage;
+  if (picked) {
+    stage = `<div class="row between"><div class="stack" style="gap:2px"><span class="small muted">${esc(t('skins.previewing'))}</span><h2 class="h2-lg">${esc(picked.name)}</h2></div>
+        <button class="btn sm" data-action="skinUnpick">${esc(t('skins.backToCurrent'))}</button></div>
+      ${skinStage(picked.image, picked.slim, activeCape)}
+      <div class="row" style="justify-content:center">
+        <div class="seg" role="group" aria-label="${esc(t('skins.model'))}">
+          <button data-action="skinSetSlim" data-slim="0" ${pressed(!picked.slim)}>${esc(t('skins.classic'))}</button>
+          <button data-action="skinSetSlim" data-slim="1" ${pressed(picked.slim)}>${esc(t('skins.slim'))}</button>
+        </div>
+        ${isMs ? `<button class="btn accent" data-action="applySkin" ${sk.busy ? 'disabled' : ''}>${sk.busy ? '<span class="spinner"></span>' : ''}${esc(t('skins.apply'))}</button>` : ''}
+        <button class="btn" data-action="renameSkin">${icon.edit()}<span>${esc(t('ctx.rename'))}</span></button>
+        <button class="btn" data-action="deleteSkin">${icon.trash()}<span>${esc(t('common.delete'))}</span></button>
+      </div>
+      ${acc && !isMs ? `<p class="note" style="text-align:center">${esc(t('skins.elyApplyNote'))}</p>` : ''}`;
+  } else if (!acc) {
+    stage = `<div class="empty" style="padding:24px">${skinCanvas({ image: '', size: 200 })}<h2 class="h2">${esc(t('skins.noAccount'))}</h2>
+      <button class="btn accent" data-action="nav" data-view="accounts">${esc(t('launch.goAccounts'))}</button></div>`;
+  } else if (!cur) {
+    stage = `<div class="row" style="padding:40px;justify-content:center"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
+  } else {
+    stage = `<div class="row between"><div class="stack" style="gap:2px"><span class="small muted">${esc(t('skins.current'))}</span><h2 class="h2-lg">${esc(acc.name)}</h2></div>
+        <span class="badge">${esc(cur.slim ? t('skins.slim') : t('skins.classic'))}</span></div>
+      ${cur.error ? `<p class="warn">${esc(t('skins.loadError'))}</p>` : ''}
+      ${skinStage(cur.image, cur.slim, activeCape)}
+      <div class="row" style="justify-content:center">
+        ${cur.image ? `<button class="btn" data-action="saveCurrentSkin">${icon.copy()}<span>${esc(t('skins.saveCurrent'))}</span></button>` : ''}
+        ${!isMs ? `<button class="btn soft" data-action="openUrl" data-url="https://ely.by/skins">${esc(t('skins.changeOnEly'))}</button>` : ''}
+      </div>`;
+  }
+
+  const capes = isMs && cur?.capes?.length ? `<section class="panel pad stack" style="gap:12px">
+      <h2 class="h2">${esc(t('skins.capes'))}</h2>
+      <div class="row" style="gap:8px">
+        <button class="card cape-btn" data-action="setCape" data-cape="" ${pressed(!cur.capes.some((c) => c.active))}><span style="height:48px;display:flex;align-items:center" class="small muted">${esc(t('skins.noCape'))}</span></button>
+        ${cur.capes.map((c) => `<button class="card cape-btn" data-action="setCape" data-cape="${esc(c.id)}" ${pressed(c.active)} title="${esc(c.alias)}">
+          <canvas class="cape-canvas" width="10" height="16" data-cape="${esc(c.image)}" style="width:30px;height:48px"></canvas>
+          <span class="small ellipsis" style="max-width:56px">${esc(c.alias)}</span></button>`).join('')}
+      </div></section>` : '';
+
+  const library = `<section class="panel pad stack" style="gap:12px">
+      <div class="row between">
+        <h2 class="h2">${esc(t('skins.mine'))}</h2>
+        <button class="btn sm soft" data-action="importSkin">${icon.upload(16)}<span>${esc(t('skins.add'))}</span></button>
+      </div>
+      ${sk.library === 'loading' || sk.library === null ? `<div class="row"><span class="spinner"></span></div>`
+        : lib.length ? `<div class="skin-grid">${lib.map((k) => `<button class="card skin-card" data-action="skinPick" data-file="${esc(k.file)}" ${pressed(k.file === sk.pick)}>
+            ${skinCanvas({ image: k.image, slim: k.slim, size: 96, label: k.name })}
+            <span class="name ellipsis">${esc(k.name)}</span></button>`).join('')}</div>`
+        : `<p class="note">${esc(t('skins.libraryEmpty'))}</p>`}
+    </section>`;
+
   return `<div class="view">
     <h1 class="page-title">${esc(t('skins.title'))}</h1>
-    <div class="row" style="gap:16px;align-items:stretch">
-      <section class="panel pad stack" style="flex:1 1 280px;align-items:center;gap:16px">
-        <div style="width:100%;display:flex;justify-content:center;padding:16px 0;border-radius:12px;background:radial-gradient(160px 120px at 50% 60%,var(--accent-soft),transparent 70%)">
-          ${skinSvg(SKINS[sk.selected], sk.model === 'slim')}
-        </div>
-        <div class="seg" role="group" aria-label="${esc(t('skins.model'))}">
-          <button data-action="setModel" data-model="classic" ${pressed(sk.model === 'classic')}>${esc(t('skins.classic'))}</button>
-          <button data-action="setModel" data-model="slim" ${pressed(sk.model === 'slim')}>${esc(t('skins.slim'))}</button>
-        </div>
-      </section>
-      <div class="stack" style="flex:999 1 380px;gap:16px">
-        <section class="panel dashed empty">${icon.upload(32)}
-          <h2 class="h2">${esc(t('skins.upload'))}</h2>
-          <p class="note">${esc(t('skins.uploadSub'))}</p>
-          <button class="btn" data-action="soon">${esc(t('common.chooseFile'))}</button>
-        </section>
-        <section class="panel pad stack" style="gap:12px">
-          <h2 class="h2">${esc(t('skins.mine'))}</h2>
-          <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:10px">
-            ${SKINS.map((k, n) => `<button class="card" style="align-items:center;gap:0;padding:12px 0" data-action="setSkin" data-n="${n}" ${pressed(n === sk.selected)} aria-label="${esc(t('skins.n', { n: n + 1 }))}">
-              <span style="display:block;width:22px;height:22px;background:#C8A07A;box-shadow:inset 0 6px 0 #3B2A22"></span>
-              <span style="display:block;width:22px;height:30px;background:${k.shirt}"></span>
-            </button>`).join('')}
-          </div>
-        </section>
-      </div>
-    </div>
+    <section class="panel pad stack" style="gap:14px">${stage}</section>
+    ${capes}
+    ${library}
   </div>`;
 }
 
@@ -864,7 +1053,7 @@ function viewAccounts() {
     <h2 class="h2" style="margin:8px 0 0 4px">${esc(t('acc.add'))}</h2>
     <div class="grid grid-2">
       <section class="panel pad stack">
-        <span class="avatar" style="width:28px;height:28px;border-radius:6px;font-size:14px;background:#207E5C">E</span>
+        <span class="avatar" style="width:28px;height:28px;border-radius:6px;font-size:calc(14px*var(--fs,1));background:#207E5C">E</span>
         <h3 class="h2">${esc(t('acc.ely'))}</h3>
         <p class="note">${esc(t('acc.elyText'))}</p>
         <button class="btn accent" style="align-self:flex-start" data-action="openEly">${esc(t('acc.elyBtn'))}</button>
@@ -872,51 +1061,165 @@ function viewAccounts() {
       <section class="panel pad stack">
         ${icon.microsoft()}
         <h3 class="h2">${esc(t('acc.ms'))}</h3>
-        <p class="note">${esc(t('acc.msText'))}</p>
-        <button class="btn" style="align-self:flex-start" data-action="msSoon">${esc(t('acc.msBtn'))}</button>
+        <p class="note">${esc(t(state.msBusy ? 'acc.msWaiting' : 'acc.msText'))}</p>
+        ${state.msReady
+          ? `<button class="btn accent" style="align-self:flex-start" data-action="msLogin" ${state.msBusy ? 'disabled' : ''}>${state.msBusy ? '<span class="spinner"></span>' : ''}${esc(t('acc.msBtn'))}</button>`
+          : `<span class="badge" style="align-self:flex-start;padding:6px 12px">${esc(t('acc.msPending'))}</span>
+             <p class="small muted">${esc(t('acc.msPendingSub'))}</p>`}
       </section>
     </div>
   </div>`;
 }
 
-function viewSettings() {
-  const s = state.settings;
-  const themeCards = THEME_ORDER.map((id) => {
-    const T = THEMES[id];
-    return `<button class="card theme-card" data-action="setTheme" data-theme="${id}" ${pressed(id === s.theme)}>
+const ACCENTS = ['#FF8CC6', '#B78CFF', '#8B9CFF', '#4FD8E8', '#4ADE9A', '#FFD166', '#FF9A3C', '#FF6B78'];
+
+/** Ползунок, который сразу показывает значение. scale — во сколько раз число в настройках меньше числа на ползунке. */
+function rangeRow({ id, key, label, min, max, step, value, unit = '', scale = 1, live = true }) {
+  return `<div class="range-row">
+    <label for="${id}" class="label">${esc(label)}</label><output id="${id}-out">${Math.round(value * scale)}${esc(unit)}</output>
+    <input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${Math.round(value * scale)}" style="grid-column:1 / -1"
+      data-bind="settings.${key}" data-number data-scale="${scale}" data-unit="${esc(unit)}" ${live ? 'data-live' : ''} data-save-settings>
+  </div>`;
+}
+
+function setLook(s) {
+  const card = (id, T, name, extra = '') => `<button class="card theme-card" data-action="setTheme" data-theme="${esc(id)}" ${pressed(id === s.theme)} ${extra}>
       <span class="theme-preview" style="border:1px solid ${T.border};background:radial-gradient(120px 60px at 90% 0%,${T.g1},transparent 70%),${T.bg}">
         <span class="side" style="background:${T.surface};border-right:1px solid ${T.border}"></span>
         <span class="main"><span class="hero-mini" style="background:${T.surface2}"></span><span class="btn-mini" style="background:${T.accent}"></span></span>
       </span>
-      <span style="font-weight:600">${esc(t('theme.' + id))}</span>
+      <span style="font-weight:600" class="ellipsis">${esc(name)}</span>
     </button>`;
-  }).join('');
-
-  return `<div class="view">
-    <h1 class="page-title">${esc(t('set.title'))}</h1>
+  const custom = s.customThemes || [];
+  const themeName = s.theme.startsWith('custom:') ? custom.find((c) => 'custom:' + c.id === s.theme)?.name : t('theme.' + s.theme);
+  const bg = s.background || {};
+  const bgUrl = bg.path ? (inApp ? fileUrl(bg.path) : bg.path) : '';
+  return `
     <section class="panel pad stack" style="gap:14px">
-      <div class="stack" style="gap:2px">
-        <h2 class="h2">${esc(t('set.theme'))}</h2>
-        <span class="note">${esc(t('set.themeNow', { name: t('theme.' + s.theme) }))}</span>
+      <div class="row between">
+        <div class="stack" style="gap:2px">
+          <h2 class="h2">${esc(t('set.theme'))}</h2>
+          <span class="note">${esc(t('set.themeNow', { name: themeName || '' }))}</span>
+        </div>
+        <div class="row" style="gap:8px">
+          <button class="btn sm" data-action="importTheme">${icon.upload(16)}<span>${esc(t('te.import'))}</span></button>
+          <button class="btn sm soft" data-action="newTheme">${icon.sparkle()}<span>${esc(t('te.create'))}</span></button>
+        </div>
       </div>
-      <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr))" role="group" aria-label="${esc(t('set.theme'))}">${themeCards}</div>
-      ${THEMES[s.theme]?.deco ? switchRow('toggleSetting', 'showDecorations', s.showDecorations !== false, t('set.decorations'), t('set.decorationsSub')) : ''}
-      ${switchRow('toggleSetting', 'reduceMotion', s.reduceMotion, t('set.reduceMotion'), t('set.reduceMotionSub'))}
+      <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr))" role="group" aria-label="${esc(t('set.theme'))}">
+        ${THEME_ORDER.map((id) => card(id, THEMES[id], t('theme.' + id))).join('')}
+        ${custom.map((c) => card('custom:' + c.id, themeFromColors(c), c.name)).join('')}
+      </div>
+      ${s.theme.startsWith('custom:') ? `<div class="row"><button class="btn sm" data-action="editTheme">${icon.edit()}<span>${esc(t('te.edit'))}</span></button></div>` : ''}
+      ${resolveTheme(s).deco ? switchRow('toggleSetting', 'showDecorations', s.showDecorations !== false, t('set.decorations'), t('set.decorationsSub')) : ''}
+      <input type="file" id="theme-file" accept=".json,application/json" hidden>
     </section>
 
-    <div class="grid grid-2">
+    <section class="panel pad stack" style="gap:12px">
+      <div class="stack" style="gap:2px"><h2 class="h2">${esc(t('look.accent'))}</h2><span class="note">${esc(t('look.accentSub'))}</span></div>
+      <div class="row" style="gap:14px">
+        <div class="swatches" role="group" aria-label="${esc(t('look.accent'))}">
+          <button class="swatch none" data-action="setAccent" data-color="" ${pressed(!s.accent)} title="${esc(t('look.accentTheme'))}" aria-label="${esc(t('look.accentTheme'))}"></button>
+          ${ACCENTS.map((c) => `<button class="swatch" style="background:${c}" data-action="setAccent" data-color="${c}" ${pressed(s.accent === c)} aria-label="${c}"></button>`).join('')}
+        </div>
+        <label class="color-row small muted"><input type="color" value="${esc(s.accent || resolveTheme(s).accent)}" data-accent-picker>${esc(t('look.accentOwn'))}</label>
+      </div>
+    </section>
+
+    <section class="panel pad stack" style="gap:12px">
+      <div class="row between">
+        <div class="stack" style="gap:2px"><h2 class="h2">${esc(t('look.bg'))}</h2><span class="note">${esc(t('look.bgSub'))}</span></div>
+        <div class="row" style="gap:8px">
+          <button class="btn sm soft" data-action="pickBackground">${icon.image(16)}<span>${esc(t('look.bgPick'))}</span></button>
+          ${bg.path ? `<button class="btn sm" data-action="clearBackground">${esc(t('cover.remove'))}</button>` : ''}
+        </div>
+      </div>
+      ${bgUrl ? `<div class="bg-preview" style="background-image:url('${esc(bgUrl)}')"></div>
+        <div class="grid grid-2">
+          ${rangeRow({ id: 'bgdim', key: 'background.dim', label: t('look.bgDim'), min: 0, max: 90, step: 5, value: bg.dim ?? 65, unit: '%' })}
+          ${rangeRow({ id: 'bgblur', key: 'background.blur', label: t('look.bgBlur'), min: 0, max: 30, step: 1, value: bg.blur ?? 8, unit: ' px' })}
+        </div>` : ''}
+    </section>
+
+    <section class="panel pad stack" style="gap:14px">
+      <h2 class="h2">${esc(t('look.sizes'))}</h2>
+      <div class="grid grid-2">
+        ${rangeRow({ id: 'uiscale', key: 'uiScale', label: t('look.scale'), min: 80, max: 130, step: 5, value: s.uiScale || 1, unit: '%', scale: 100, live: false })}
+        ${rangeRow({ id: 'textscale', key: 'textScale', label: t('look.text'), min: 90, max: 125, step: 5, value: s.textScale || 1, unit: '%', scale: 100 })}
+        ${rangeRow({ id: 'radius', key: 'radiusScale', label: t('look.radius'), min: 30, max: 160, step: 10, value: s.radiusScale ?? 1, unit: '%', scale: 100 })}
+        <div class="stack" style="gap:8px">
+          <span class="label">${esc(t('look.density'))}</span>
+          <div class="seg" role="group" aria-label="${esc(t('look.density'))}" style="align-self:flex-start">
+            ${['compact', 'normal', 'roomy'].map((d) => `<button data-action="setDensity" data-d="${d}" ${pressed((s.density || 'normal') === d)}>${esc(t('look.density.' + d))}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+      <div class="row"><button class="btn sm" data-action="resetLook">${esc(t('look.reset'))}</button></div>
+      ${switchRow('toggleSetting', 'reduceMotion', s.reduceMotion, t('set.reduceMotion'), t('set.reduceMotionSub'))}
+    </section>`;
+}
+
+function setSound(s) {
+  return `
+    <section class="panel pad stack" style="gap:8px">
+      <h2 class="h2">${esc(t('snd.title'))}</h2>
+      ${switchRow('toggleOn', 'sound', s.sound !== false, t('snd.sound'), t('snd.soundSub'))}
+      ${s.sound !== false ? `<div class="row" style="gap:14px;align-items:flex-end">
+        <div style="flex:1 1 260px">${rangeRow({ id: 'vol', key: 'soundVolume', label: t('snd.volume'), min: 5, max: 100, step: 5, value: s.soundVolume ?? 60, unit: '%' })}</div>
+        <button class="btn sm" data-action="testChime">${icon.bell(16)}<span>${esc(t('snd.test'))}</span></button>
+      </div>` : ''}
+      ${switchRow('toggleOn', 'notifications', s.notifications !== false, t('snd.notify'), t('snd.notifySub'))}
+    </section>`;
+}
+
+function setGame(s) {
+  return `
+    <section class="panel pad stack" style="gap:6px">
+      <h2 class="h2" style="margin-bottom:6px">${esc(t('set.behavior'))}</h2>
+      ${switchRow('toggleSetting', 'hideOnLaunch', s.hideOnLaunch, t('set.hideOnLaunch'))}
+      ${s.hideOnLaunch ? `<div class="stack" style="gap:8px;padding:6px 0 10px">
+        <span class="label">${esc(t('set.afterClose'))}</span>
+        <div class="seg" role="group" aria-label="${esc(t('set.afterClose'))}" style="align-self:flex-start">
+          <button data-action="setAfterClose" data-v="restore" ${pressed(s.afterGameClose !== 'stay')}>${esc(t('set.afterClose.restore'))}</button>
+          <button data-action="setAfterClose" data-v="stay" ${pressed(s.afterGameClose === 'stay')}>${esc(t('set.afterClose.stay'))}</button>
+        </div></div>` : ''}
+      ${switchRow('toggleSetting', 'autoJava', s.autoJava, t('set.autoJava'))}
+    </section>
+
+    <section class="panel pad stack" style="gap:14px">
+      <div class="stack" style="gap:2px"><h2 class="h2">${esc(t('def.title'))}</h2><span class="note">${esc(t('def.sub'))}</span></div>
+      ${rangeRow({ id: 'defmem', key: 'defaultMemoryGb', label: t('is.memory'), min: 1, max: 16, step: 1, value: s.defaultMemoryGb || 4, unit: ' ' + t('unit.gb'), live: false })}
+      <div class="row">
+        <span class="label" style="min-width:120px">${esc(t('is.window'))}</span>
+        <label for="defw" class="sr">${esc(t('is.width'))}</label>
+        <input id="defw" class="input" style="width:110px" type="number" min="320" value="${s.defaultWindowWidth || 1280}" data-bind="settings.defaultWindowWidth" data-number data-save-settings>
+        <span class="muted">×</span>
+        <label for="defh" class="sr">${esc(t('is.height'))}</label>
+        <input id="defh" class="input" style="width:110px" type="number" min="240" value="${s.defaultWindowHeight || 720}" data-bind="settings.defaultWindowHeight" data-number data-save-settings>
+      </div>
+      ${switchRow('toggleSetting', 'defaultFullscreen', s.defaultFullscreen, t('is.fullscreen'))}
+      ${switchRow('toggleSetting', 'defaultBackupWorlds', s.defaultBackupWorlds, t('bk.auto'))}
+      <div class="field">
+        <label for="defjvm" class="label">${esc(t('is.jvm'))}</label>
+        <textarea id="defjvm" class="input mono" rows="2" placeholder="-XX:+UseG1GC" data-bind="settings.defaultJvmArgs" data-save-settings>${esc(s.defaultJvmArgs || '')}</textarea>
+      </div>
+    </section>
+
+    <section class="panel pad stack" style="gap:10px">
+      <h2 class="h2">${esc(t('bk.title'))}</h2>
+      ${rangeRow({ id: 'bkkeep', key: 'backupKeep', label: t('bk.keep'), min: 1, max: 30, step: 1, value: s.backupKeep || 5, live: false })}
+    </section>`;
+}
+
+function setGeneral(s) {
+  return `<div class="grid grid-2">
       <section class="panel pad stack">
         <h2 class="h2">${esc(t('set.general'))}</h2>
         <label for="lang" class="label">${esc(t('set.language'))}</label>
         <select id="lang" class="input" data-change="setLanguage">
           ${Object.entries(LANGS).map(([code, dict]) => `<option value="${code}" ${code === s.language ? 'selected' : ''}>${esc(dict['lang.name'])}</option>`).join('')}
         </select>
-      </section>
-      <section class="panel pad stack" style="gap:4px">
-        <h2 class="h2" style="margin-bottom:6px">${esc(t('set.behavior'))}</h2>
-        ${switchRow('toggleSetting', 'hideOnLaunch', s.hideOnLaunch, t('set.hideOnLaunch'))}
         ${switchRow('toggleSetting', 'checkUpdates', s.checkUpdates, t('set.checkUpdates'))}
-        ${switchRow('toggleSetting', 'autoJava', s.autoJava, t('set.autoJava'))}
       </section>
       <section class="panel pad stack">
         <h2 class="h2">${esc(t('set.apis'))}</h2>
@@ -930,7 +1233,19 @@ function viewSettings() {
         <p class="note">${esc(t('set.disclaimer'))}</p>
         <a href="#" data-action="openUrl" data-url="${REPO_URL}">${esc(t('set.sourceCode'))}</a>
       </section>
-    </div>
+    </div>`;
+}
+
+function viewSettings() {
+  const s = state.settings;
+  const tab = state.setTab;
+  const tabs = ['look', 'sound', 'game', 'general'].map((k) =>
+    `<button role="tab" aria-selected="${tab === k}" data-action="setSetTab" data-tab="${k}">${esc(t('set.tab.' + k))}</button>`).join('');
+  const body = { look: setLook, sound: setSound, game: setGame, general: setGeneral }[tab](s);
+  return `<div class="view">
+    <h1 class="page-title">${esc(t('set.title'))}</h1>
+    <div class="tabs" role="tablist">${tabs}</div>
+    ${body}
   </div>`;
 }
 
@@ -1064,7 +1379,8 @@ function contextMenu() {
     `<button role="menuitem" data-action="${action}" data-id="${esc(id)}" ${extra}>${ic}<span>${esc(t(label))}</span></button>`;
   // Не даём меню вылезти за край окна
   const left = Math.min(x, window.innerWidth - 230);
-  const top = Math.min(y, window.innerHeight - 370);
+  const top = Math.min(y, window.innerHeight - 450);
+  const inst = state.instances.find((i) => i.id === id);
   return `<div class="ctx-backdrop" data-action="closeCtx"></div>
     <div class="ctx" role="menu" aria-label="${esc(t('ctx.label'))}" style="left:${left}px;top:${top}px">
       ${item('ctxPlay', icon.play(14), 'ctx.play')}
@@ -1075,6 +1391,9 @@ function contextMenu() {
       ${item('ctxCover', icon.palette(), 'ctx.cover')}
       ${item('ctxDuplicate', icon.copy(), 'ctx.duplicate')}
       ${item('ctxShare', icon.upload(16), 'ctx.share')}
+      <div class="ctx-sep" role="separator"></div>
+      ${item('toggleFavorite', icon.star(16), inst?.favorite ? 'org.unfavorite' : 'org.favorite')}
+      ${item('toggleArchive', icon.archive(), inst?.archived ? 'org.unarchive' : 'org.toArchive')}
       <div class="ctx-sep" role="separator"></div>
       ${item('ctxDelete', icon.trash(), 'ctx.delete', 'class="danger"')}
     </div>`;
@@ -1108,7 +1427,7 @@ function renderOverlay() {
       <p class="note">${esc(t('launch.noAccountText'))}</p>
       <div class="row" style="justify-content:flex-end">
         <button class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
-        <button class="btn accent" data-action="openEly">${esc(t('launch.goAccounts'))}</button>
+        <button class="btn accent" data-action="goAccounts">${esc(t('launch.goAccounts'))}</button>
       </div></div></div>`;
   }
   if (d?.type === 'crash') {
@@ -1163,6 +1482,90 @@ function renderOverlay() {
       </div></div></div>`;
   }
   if (d?.type === 'updates') html += updatesDialog();
+  if (d?.type === 'pickWorld') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" style="max-width:480px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('dp.whichWorld'))}</h2><p class="note">${esc(t('dp.whichWorldSub', { name: d.title }))}</p></div>
+      <div class="list" style="padding:0;max-height:320px;overflow:auto">
+        ${d.worlds.map((w) => `<button class="list-row" style="border:0;background:transparent;cursor:pointer;text-align:left;width:100%" data-action="installToWorld" data-world="${esc(w.folder)}" ${d.busy ? 'disabled' : ''}>
+          <span class="thumb mod-icon" style="width:36px;height:36px" aria-hidden="true">${esc(w.folder.charAt(0).toUpperCase())}</span>
+          <span class="grow card-title" style="font-size:calc(14px*var(--fs,1))">${esc(w.folder)}</span>
+          ${d.busy === w.folder ? '<span class="spinner"></span>' : icon.chevronRight()}
+        </button>`).join('')}
+      </div>
+      <div class="row" style="justify-content:flex-end"><button class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button></div>
+    </div></div>`;
+  }
+  if (d?.type === 'prism') {
+    const sizeOf = (n) => (n > 1073741824 ? t('unit.gbN', { n: (n / 1073741824).toFixed(1) }) : t('unit.mb', { n: Math.round(n / 1048576) }));
+    let body;
+    if (!d.list) body = `<div class="row" style="padding:12px"><span class="spinner"></span><span class="muted">${esc(t('prism.searching'))}</span></div>`;
+    else if (!d.list.length) body = `<p class="note">${esc(t('prism.notFound'))}</p>`;
+    else body = `<div class="row between"><span class="small muted">${esc(t('prism.found', { n: d.list.length, source: d.list[0].source }))}</span>
+        <button class="btn sm" data-action="prismAll" ${d.busy ? 'disabled' : ''}>${esc(t(d.picked.size === d.list.length ? 'prism.none' : 'prism.all'))}</button></div>
+      <div class="list" style="padding:0;max-height:340px;overflow:auto">
+        ${d.list.map((x, n) => `<label class="check-row list-row">
+          <input type="checkbox" data-prism="${n}" ${d.picked.has(n) ? 'checked' : ''} ${d.busy ? 'disabled' : ''}>
+          <span class="stack grow" style="gap:2px"><b>${esc(x.name)}</b>
+            <span class="small muted">Minecraft ${esc(x.gameVersion)} · ${esc(loaderLabel(x.loader))}${x.loaderVersion ? ' ' + esc(x.loaderVersion) : ''} · ${esc(sizeOf(x.size))}</span></span>
+        </label>`).join('')}
+      </div>`;
+    const prog = d.progress;
+    html += `<div class="overlay" ${d.busy ? '' : 'data-action="closeDialog"'}><div class="dialog" style="max-width:620px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="row" style="gap:14px;flex-wrap:nowrap;align-items:flex-start">
+        <span class="avatar" style="background:var(--accent-soft);color:var(--accent-text)">${icon.move(20)}</span>
+        <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('prism.title'))}</h2><p class="note">${esc(t('prism.sub'))}</p></div>
+      </div>
+      ${body}
+      ${d.busy && prog ? `<div class="stack" style="gap:8px"><span class="small muted">${esc(t('prism.copying', { name: prog.name || '', done: Math.min(prog.done + 1, prog.total), total: prog.total }))}</span>
+        <div class="bar"><span class="indeterminate"></span></div></div>` : ''}
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="closeDialog" ${d.busy ? 'disabled' : ''}>${esc(t('common.cancel'))}</button>
+        ${d.list?.length ? `<button class="btn accent" data-action="prismImport" ${d.busy || !d.picked.size ? 'disabled' : ''}>${d.busy ? '<span class="spinner"></span>' : ''}${esc(t('prism.go', { n: d.picked.size }))}</button>` : ''}
+      </div>
+    </div></div>`;
+  }
+  if (d?.type === 'restore') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="row" style="align-items:flex-start;gap:14px;flex-wrap:nowrap">
+        <span class="avatar" style="background:var(--accent-soft);color:var(--accent-text)">${icon.restore(20)}</span>
+        <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('bk.restoreTitle', { name: d.world }))}</h2><p class="note">${esc(t('bk.restoreText', { date: d.date }))}</p></div>
+      </div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="closeDialog" ${d.busy ? 'disabled' : ''}>${esc(t('common.cancel'))}</button>
+        <button class="btn accent" data-action="restoreBackup" data-file="${esc(d.file)}" ${d.busy ? 'disabled' : ''}>${d.busy ? '<span class="spinner"></span>' : ''}${esc(t('bk.restore'))}</button>
+      </div></div></div>`;
+  }
+  if (d?.type === 'renameSkin') {
+    html += `<div class="overlay" data-action="closeDialog"><form class="dialog" style="max-width:440px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop data-submit="renameSkinSubmit">
+      <h2 id="dlg-title">${esc(t('rename.title'))}</h2>
+      <label for="rename-input" class="sr">${esc(t('rename.title'))}</label>
+      <input id="rename-input" class="input" maxlength="40" value="${esc(d.name)}" data-bind="dialog.name" autofocus>
+      <div class="row" style="justify-content:flex-end">
+        <button type="button" class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
+        <button type="submit" class="btn accent">${esc(t('common.save'))}</button>
+      </div></form></div>`;
+  }
+  if (d?.type === 'themeEditor') {
+    const color = (key, label) => `<label class="color-row"><input type="color" value="${esc(d[key])}" data-bind="dialog.${key}" data-live-theme><span class="stack" style="gap:2px"><span>${esc(label)}</span><span class="small muted mono">${esc(d[key])}</span></span></label>`;
+    html += `<div class="overlay side" data-action="closeDialog"><form class="dialog" style="max-width:380px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop data-submit="saveTheme">
+      <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t(d.id ? 'te.editTitle' : 'te.createTitle'))}</h2><p class="note">${esc(t('te.sub'))}</p></div>
+      <div class="field"><label for="te-name" class="label">${esc(t('te.name'))}</label>
+        <input id="te-name" class="input" maxlength="30" value="${esc(d.name)}" data-bind="dialog.name" placeholder="${esc(t('te.namePlaceholder'))}"></div>
+      ${color('bg', t('te.bg'))}
+      ${color('accent', t('te.accent'))}
+      ${color('text', t('te.text'))}
+      ${d.lowContrast ? `<p class="warn small" role="alert">${esc(t('te.lowContrast'))}</p>` : ''}
+      <div class="row between">
+        <div class="row" style="gap:6px">
+          ${d.id ? `<button type="button" class="btn sm" data-action="exportTheme">${esc(t('te.export'))}</button>
+                    <button type="button" class="icon-btn" style="width:34px;height:34px" data-action="deleteTheme" aria-label="${esc(t('common.delete'))}" title="${esc(t('common.delete'))}">${icon.trash()}</button>` : ''}
+        </div>
+        <div class="row" style="gap:6px">
+          <button type="button" class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
+          <button type="submit" class="btn accent">${esc(t('common.save'))}</button>
+        </div>
+      </div></form></div>`;
+  }
   if (d?.type === 'deleteWorld') {
     html += `<div class="overlay" data-action="closeDialog"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
       <div class="row" style="align-items:flex-start;gap:14px;flex-wrap:nowrap">
@@ -1198,6 +1601,7 @@ function render(scrollTop = false) {
   if (state.view !== lastView) content.firstElementChild?.classList.add('enter');
   lastView = state.view;
   content.scrollTop = scrollTop ? 0 : keep;
+  paintSkins(content);
   renderOverlay();
 }
 
@@ -1248,6 +1652,8 @@ const LAUNCH_ERRORS = {
   ALREADY_RUNNING: () => t('launch.alreadyRunning'),
   ELY_RELOGIN: () => t('launch.relogin'),
   PRE_LAUNCH_FAILED: () => t('launch.preLaunchFailed'),
+  MS_RELOGIN: () => t('launch.msRelogin'),
+  MS_NOT_CONFIGURED: () => t('acc.msPendingSub'),
 };
 
 const stopping = new Set();
@@ -1273,7 +1679,7 @@ async function launch(id) {
     else if (code.startsWith('JAVA_START_FAILED')) toast(t('launch.javaFailed'), true);
     else if (LAUNCH_ERRORS[code]) toast(LAUNCH_ERRORS[code](), true);
     else toast(t('launch.failed', { message: code }), true);
-    if (code === 'ELY_RELOGIN') { state.view = 'accounts'; }
+    if (code === 'ELY_RELOGIN' || code === 'MS_RELOGIN') { state.view = 'accounts'; }
   }
   render();
 }
@@ -1291,8 +1697,11 @@ function subscribe() {
   });
   on('game-state', (g) => {
     delete state.progress[g.instanceId];
-    if (g.running) state.running.add(g.instanceId);
-    else {
+    if (g.running) {
+      state.running.add(g.instanceId);
+      const inst = state.instances.find((i) => i.id === g.instanceId);
+      celebrate('ready', t('notify.readyTitle'), t('notify.readyBody', { name: inst?.name || 'Minecraft' }));
+    } else {
       state.running.delete(g.instanceId);
       const byUser = stopping.delete(g.instanceId);
       if (!byUser && g.exitCode && g.exitCode !== 0) state.dialog = { type: 'crash', id: g.instanceId, log: g.log };
@@ -1302,6 +1711,13 @@ function subscribe() {
   on('import-progress', (p) => {
     state.importing = p.done < p.total ? p : null;
     renderOverlay();
+  });
+  on('prism-progress', (p) => {
+    if (state.dialog?.type === 'prism') { state.dialog.progress = p; renderOverlay(); }
+  });
+  on('backup-state', (b) => {
+    // Копия миров после игры: просто обновим список, если он открыт
+    if (!b.running && state.backups.id === b.instanceId) { state.backups.list = null; if (state.view === 'instance') render(); }
   });
   on('update-progress', (u) => {
     state.updating = u;
@@ -1325,6 +1741,7 @@ async function importFlow(path) {
     state.view = 'home';
     render(true);
     toast(t('inst.imported', { name: inst.name }));
+    celebrate('done', t('notify.doneTitle'), t('inst.imported', { name: inst.name }));
   } catch (e) {
     state.importing = null;
     toast(String(e) === 'NOT_MRPACK' ? t('inst.notMrpack') : t('error.generic', { message: e }), true);
@@ -1335,7 +1752,7 @@ async function saveQuick(inst) {
   try {
     await api.updateInstance(inst);
     await loadInstances();
-    if (state.edit?.id === inst.id) Object.assign(state.edit, { name: inst.name, tint: inst.tint });
+    if (state.edit?.id === inst.id) Object.assign(state.edit, { name: inst.name, tint: inst.tint, favorite: inst.favorite, archived: inst.archived, backupWorlds: inst.backupWorlds });
   } catch (e) { toast(t('error.generic', { message: e }), true); }
 }
 
@@ -1478,8 +1895,10 @@ const actions = {
   },
   askDelete: (d) => { state.dialog = { type: 'confirmDelete', id: d.id }; renderOverlay(); },
   closeDialog: () => {
-    if (state.updating) return;
+    if (state.updating || state.dialog?.busy) return;
+    const wasTheme = state.dialog?.type === 'themeEditor';
     state.dialog = null; renderOverlay();
+    if (wasTheme) applySettings();
   },
   confirmDelete: async (d) => {
     state.dialog = null;
@@ -1503,7 +1922,15 @@ const actions = {
   },
   install: async (d) => {
     const r = state.res;
-    if (r.kind === 'datapack') return toast(t('res.datapackSoon'));
+    if (r.kind === 'datapack') {
+      const target = state.instances.find((i) => i.id === r.targetId) || selected();
+      if (!target) return toast(t('res.noTarget'), true);
+      let worlds = [];
+      try { worlds = await api.listWorlds(target.id); } catch { /* ниже скажем, что миров нет */ }
+      if (!worlds.length) return toast(t('dp.noWorlds', { name: target.name }), true);
+      state.dialog = { type: 'pickWorld', pid: d.pid, title: d.title, worlds, target: target.id, busy: null };
+      return renderOverlay();
+    }
     if (r.kind === 'modpack') {
       r.installing[d.pid] = true; render();
       try {
@@ -1511,6 +1938,7 @@ const actions = {
         await loadInstances();
         state.selectedId = inst.id;
         toast(t('res.modpackDone', { name: inst.name }));
+        celebrate('done', t('notify.doneTitle'), t('res.modpackDone', { name: inst.name }));
       } catch (e) { toast(t('error.generic', { message: e }), true); }
       delete r.installing[d.pid]; state.importing = null; render();
       return;
@@ -1681,8 +2109,310 @@ const actions = {
   setSource: (d) => { state.res.source = d.source; render(); if (d.source === 'modrinth' && !state.res.results) runSearch(); },
   search: () => runSearch(),
 
-  setModel: (d) => { state.skins.model = d.model; render(); },
-  setSkin: (d) => { state.skins.selected = Number(d.n); render(); },
+  // ---------- 0.5: датапаки ----------
+  installToWorld: async (d) => {
+    const dlg = state.dialog;
+    if (dlg.busy) return;
+    dlg.busy = d.world; renderOverlay();
+    try {
+      const res = await api.installProject(dlg.target, dlg.pid, d.world);
+      state.dialog = null;
+      toast(t('dp.installed', { name: res.installed[0] || dlg.title, world: d.world }));
+      if (state.dp.world === d.world) state.dp.list = null;
+    } catch (e) {
+      dlg.busy = null;
+      const code = String(e);
+      const inst = state.instances.find((i) => i.id === dlg.target);
+      if (code.startsWith('NO_COMPATIBLE_VERSION')) toast(t('res.noCompatible', { name: dlg.title, version: inst?.gameVersion, loader: t('res.kind.datapack') }), true);
+      else toast(t('error.generic', { message: code }), true);
+    }
+    renderOverlay();
+  },
+  toggleDatapacks: (d) => {
+    if (state.dp.world === d.folder) { state.dp = { world: null, list: null }; render(); }
+    else loadDatapacks(d.folder);
+  },
+  deleteDatapack: async (d) => {
+    try {
+      await api.deleteDatapack(state.edit.id, state.dp.world, d.file);
+      state.dp.list = state.dp.list.filter((x) => x.file !== d.file);
+      toast(t('dp.deleted'));
+      render();
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  findDatapacks: () => {
+    Object.assign(state.res, { targetId: state.edit.id, kind: 'datapack', results: null });
+    go('resources');
+    runSearch();
+  },
+
+  // ---------- 0.5: копии миров ----------
+  toggleAutoBackup: async () => {
+    const inst = state.instances.find((i) => i.id === state.edit.id);
+    state.edit.backupWorlds = !state.edit.backupWorlds;
+    render();
+    if (inst) await saveQuick({ ...inst, backupWorlds: state.edit.backupWorlds });
+  },
+  makeBackup: async (d) => {
+    state.backups.busy = d.folder; render();
+    try {
+      await api.makeBackup(state.edit.id, d.folder);
+      toast(t('bk.made', { name: d.folder }));
+      state.backups.list = null;
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+    state.backups.busy = null; render();
+  },
+  askRestore: (d) => {
+    const b = state.backups.list.find((x) => x.file === d.file);
+    if (!b) return;
+    const date = new Date(b.time * 1000).toLocaleString(document.documentElement.lang, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+    state.dialog = { type: 'restore', file: b.file, world: b.world, date, busy: false };
+    renderOverlay();
+  },
+  restoreBackup: async (d) => {
+    const dlg = state.dialog;
+    if (state.running.has(state.edit.id)) return toast(t('bk.closeGame'), true);
+    dlg.busy = true; renderOverlay();
+    try {
+      const world = await api.restoreBackup(state.edit.id, d.file);
+      state.dialog = null;
+      toast(t('bk.restored', { name: world }));
+      state.worlds.list = null; state.backups.list = null;
+    } catch (e) { dlg.busy = false; toast(t('error.generic', { message: e }), true); }
+    render();
+  },
+  deleteBackup: async (d) => {
+    try { await api.deleteBackup(state.edit.id, d.file); state.backups.list = state.backups.list.filter((x) => x.file !== d.file); render(); }
+    catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+
+  // ---------- 0.5: перенос из Prism ----------
+  openPrism: async () => {
+    state.dialog = { type: 'prism', list: null, picked: new Set(), busy: false, progress: null };
+    renderOverlay();
+    try {
+      const list = await api.findPrism();
+      if (state.dialog?.type !== 'prism') return;
+      state.dialog.list = list;
+      state.dialog.picked = new Set(list.map((_, n) => n));
+    } catch (e) {
+      if (state.dialog?.type === 'prism') state.dialog.list = [];
+      toast(t('error.generic', { message: e }), true);
+    }
+    renderOverlay();
+  },
+  prismAll: () => {
+    const d = state.dialog;
+    d.picked = d.picked.size === d.list.length ? new Set() : new Set(d.list.map((_, n) => n));
+    renderOverlay();
+  },
+  prismImport: async () => {
+    const d = state.dialog;
+    d.busy = true; renderOverlay();
+    try {
+      const n = await api.importPrism(d.list.filter((_, i) => d.picked.has(i)).map((x) => x.path));
+      state.dialog = null;
+      await loadInstances();
+      state.instFilter = 'all';
+      render();
+      toast(t('prism.done', { n }));
+      celebrate('done', t('notify.doneTitle'), t('prism.done', { n }));
+    } catch (e) {
+      d.busy = false; renderOverlay();
+      toast(t('error.generic', { message: e }), true);
+    }
+  },
+
+  // ---------- 0.5: избранное, папки, теги, архив ----------
+  setInstFilter: (d) => { state.instFilter = d.f; render(); },
+  toggleFavorite: async (d) => {
+    state.ctx = null;
+    const inst = state.instances.find((i) => i.id === d.id);
+    if (inst) await saveQuick({ ...inst, favorite: !inst.favorite });
+    render();
+  },
+  toggleArchive: async (d) => {
+    state.ctx = null;
+    const inst = state.instances.find((i) => i.id === d.id);
+    if (!inst) return renderOverlay();
+    await saveQuick({ ...inst, archived: !inst.archived });
+    toast(t(inst.archived ? 'org.unarchived' : 'org.archivedToast', { name: inst.name }));
+    if (state.selectedId === inst.id && !inst.archived) state.selectedId = null;
+    render();
+  },
+  addTag: () => {
+    const tag = (state.tagDraft || '').trim().slice(0, 24);
+    if (!tag) return;
+    const tags = state.edit.tags || (state.edit.tags = []);
+    if (!tags.some((g) => g.toLowerCase() === tag.toLowerCase())) tags.push(tag);
+    state.tagDraft = '';
+    render();
+    $('#etag')?.focus();
+  },
+  removeTag: (d) => { state.edit.tags = (state.edit.tags || []).filter((g) => g !== d.tag); render(); },
+
+  // ---------- 0.5: Microsoft ----------
+  goAccounts: () => { state.dialog = null; go('accounts'); },
+  msLogin: async () => {
+    if (state.msBusy) return;
+    state.msBusy = true; render();
+    try {
+      state.accounts = await api.addMicrosoftAccount();
+      state.skins.accountFor = null;
+      toast(t('acc.welcome', { name: activeAccount()?.name ?? '' }));
+    } catch (e) {
+      const code = String(e).split(':')[0];
+      const known = ['MS_CANCELLED', 'MS_TIMEOUT', 'MS_NO_XBOX', 'MS_CHILD', 'MS_XBOX_REGION', 'MS_ADULT_VERIFY', 'MS_NOT_APPROVED', 'MS_NOT_CONFIGURED', 'MS_NO_GAME', 'MS_BAD_STATE', 'NETWORK'];
+      toast(known.includes(code) ? t('acc.err.' + code) : t('error.generic', { message: e }), true);
+    }
+    state.msBusy = false; render();
+  },
+
+  // ---------- 0.5: скины ----------
+  skinPick: (d) => { state.skins.pick = state.skins.pick === d.file ? null : d.file; render(); },
+  skinUnpick: () => { state.skins.pick = null; render(); },
+  importSkin: async () => {
+    if (!inApp) return toast(t('common.comingSoon'));
+    try {
+      const list = await api.importSkin();
+      if (list) { state.skins.library = list; state.skins.pick = list[0]?.file || null; render(); toast(t('skins.added')); }
+    } catch (e) { toast(String(e) === 'NOT_A_SKIN' ? t('skins.notSkin') : t('error.generic', { message: e }), true); }
+  },
+  saveCurrentSkin: async () => {
+    const cur = state.skins.account;
+    const acc = activeAccount();
+    if (!cur?.image || !acc) return;
+    try {
+      state.skins.library = await api.saveSkinData(cur.image, acc.name, cur.slim);
+      toast(t('skins.saved'));
+      render();
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  skinSetSlim: async (d) => {
+    const k = state.skins.library.find((x) => x.file === state.skins.pick);
+    if (!k) return;
+    try { state.skins.library = await api.updateSkin(k.file, k.name, d.slim === '1'); render(); } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  renameSkin: () => {
+    const k = state.skins.library.find((x) => x.file === state.skins.pick);
+    if (!k) return;
+    state.dialog = { type: 'renameSkin', file: k.file, name: k.name };
+    renderOverlay();
+    const el = $('#rename-input'); el?.focus(); el?.select();
+  },
+  renameSkinSubmit: async () => {
+    const d = state.dialog;
+    const k = state.skins.library.find((x) => x.file === d.file);
+    if (!k || !d.name.trim()) return;
+    try { state.skins.library = await api.updateSkin(k.file, d.name.trim(), k.slim); } catch (e) { toast(t('error.generic', { message: e }), true); }
+    state.dialog = null;
+    render();
+  },
+  deleteSkin: async () => {
+    try {
+      state.skins.library = await api.deleteSkin(state.skins.pick);
+      state.skins.pick = null;
+      render();
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  applySkin: async () => {
+    const acc = activeAccount();
+    if (!acc || state.skins.busy) return;
+    state.skins.busy = true; render();
+    try {
+      await api.applySkin(acc.id, state.skins.pick);
+      toast(t('skins.applied'));
+      state.skins.pick = null;
+      state.skins.accountFor = null; // перечитаем скин с серверов
+    } catch (e) {
+      const code = String(e);
+      toast(code === 'ELY_SITE' ? t('skins.elyApplyNote') : code.startsWith('NETWORK') ? t('acc.err.NETWORK') : t('skins.applyFailed', { message: code }), true);
+    }
+    state.skins.busy = false; render();
+  },
+  setCape: async (d) => {
+    const acc = activeAccount();
+    if (!acc) return;
+    try {
+      await api.setCape(acc.id, d.cape || null);
+      for (const c of state.skins.account.capes) c.active = c.id === d.cape;
+      render();
+      toast(t(d.cape ? 'skins.capeOn' : 'skins.capeOff'));
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+
+  // ---------- 0.5: внешний вид ----------
+  setSetTab: (d) => { state.setTab = d.tab; render(); },
+  setAccent: (d) => { state.settings.accent = d.color; applySettings(); render(); saveSettings(); },
+  setDensity: (d) => { state.settings.density = d.d; applySettings(); render(); saveSettings(); },
+  resetLook: () => {
+    Object.assign(state.settings, { uiScale: 1, textScale: 1, radiusScale: 1, density: 'normal' });
+    applySettings(); render(); saveSettings();
+  },
+  pickBackground: async () => {
+    if (!inApp) return toast(t('common.comingSoon'));
+    try {
+      const path = await api.pickBackground();
+      if (!path) return;
+      state.settings.background = { dim: 65, blur: 8, ...(state.settings.background || {}), path };
+      applySettings(); render(); saveSettings();
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  clearBackground: () => { state.settings.background = null; applySettings(); render(); saveSettings(); },
+  newTheme: () => {
+    const cur = resolveTheme(state.settings);
+    state.dialog = { type: 'themeEditor', id: '', name: '', bg: cur.bg.startsWith('#') ? cur.bg : '#170B15', accent: cur.accent, text: cur.text };
+    renderOverlay();
+    $('#te-name')?.focus();
+  },
+  editTheme: () => {
+    const c = (state.settings.customThemes || []).find((x) => 'custom:' + x.id === state.settings.theme);
+    if (!c) return;
+    state.dialog = { type: 'themeEditor', ...c };
+    renderOverlay();
+  },
+  saveTheme: () => {
+    const d = state.dialog;
+    const list = state.settings.customThemes || (state.settings.customThemes = []);
+    const theme = { id: d.id || 't' + Date.now().toString(36), name: d.name.trim() || t('te.namePlaceholder'), bg: d.bg, accent: d.accent, text: d.text };
+    const at = list.findIndex((x) => x.id === theme.id);
+    if (at >= 0) list[at] = theme; else list.push(theme);
+    state.settings.theme = 'custom:' + theme.id;
+    state.settings.accent = '';
+    state.dialog = null;
+    applySettings(); render(); saveSettings();
+    toast(t('te.saved', { name: theme.name }));
+  },
+  deleteTheme: () => {
+    const d = state.dialog;
+    state.settings.customThemes = (state.settings.customThemes || []).filter((x) => x.id !== d.id);
+    if (state.settings.theme === 'custom:' + d.id) state.settings.theme = 'sakura';
+    state.dialog = null;
+    applySettings(); render(); saveSettings();
+  },
+  exportTheme: async () => {
+    const d = state.dialog;
+    const json = JSON.stringify({ spectiaTheme: 1, name: d.name, bg: d.bg, accent: d.accent, text: d.text }, null, 2);
+    try {
+      if (!inApp) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+        a.download = (d.name || 'theme') + '.spectia-theme.json';
+        a.click();
+        return;
+      }
+      const path = await api.exportTheme(d.name || 'theme', json);
+      if (path) toast(t('te.exported', { path }));
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  importTheme: () => $('#theme-file')?.click(),
+  testChime: () => chime('ready', (state.settings.soundVolume ?? 60) / 100),
+  toggleOn: (d) => {
+    // Настройки, которые по умолчанию включены (undefined = включено)
+    state.settings[d.key] = state.settings[d.key] === false;
+    render(); saveSettings();
+  },
+  setAfterClose: (d) => { state.settings.afterGameClose = d.v; render(); saveSettings(); },
 
   setTheme: (d) => { state.settings.theme = d.theme; applySettings(); render(); saveSettings(); },
   toggleSetting: (d) => {
@@ -1714,9 +2444,20 @@ document.addEventListener('click', (ev) => {
 document.addEventListener('input', (ev) => {
   const el = ev.target;
   if (!el.dataset.bind) return;
-  const value = 'number' in el.dataset ? Number(el.value) : el.value;
+  const value = 'number' in el.dataset ? Number(el.value) / Number(el.dataset.scale || 1) : el.value;
   setPath(el.dataset.bind, value);
   if (el.id === 'mem') $('#mem-label').textContent = value + ' ' + t('unit.gb');
+  const out = el.type === 'range' && document.getElementById(el.id + '-out');
+  if (out) out.textContent = el.value + (el.dataset.unit || '');
+  if ('live' in el.dataset) applyAppearance(state.settings);
+  if ('liveTheme' in el.dataset && state.dialog?.type === 'themeEditor') {
+    const d = state.dialog;
+    applyAppearance(state.settings, d);
+    el.parentElement.querySelector('.mono').textContent = el.value;
+    // Предупредим, если текст плохо читается на фоне
+    const low = Math.abs(lumOf(d.text) - lumOf(d.bg)) < 0.4;
+    if (low !== !!d.lowContrast) { d.lowContrast = low; renderOverlay(); }
+  }
   if ('filterMods' in el.dataset) filterModRows();
   if ('search' in el.dataset) {
     clearTimeout(searchTimer);
@@ -1732,9 +2473,34 @@ document.addEventListener('change', (ev) => {
     renderOverlay();
     return;
   }
+  if (el.dataset.prism !== undefined && state.dialog?.type === 'prism') {
+    const n = Number(el.dataset.prism);
+    if (el.checked) state.dialog.picked.add(n); else state.dialog.picked.delete(n);
+    renderOverlay();
+    return;
+  }
+  if ('accentPicker' in el.dataset) { actions.setAccent({ color: el.value }); return; }
+  if (el.id === 'theme-file' && el.files?.[0]) {
+    const file = el.files[0];
+    file.text().then((text) => {
+      const data = JSON.parse(text);
+      const ok = (c) => /^#[0-9a-f]{6}$/i.test(c);
+      if (!ok(data.bg) || !ok(data.accent) || !ok(data.text)) throw new Error('bad');
+      const theme = { id: 't' + Date.now().toString(36), name: String(data.name || file.name).slice(0, 30), bg: data.bg, accent: data.accent, text: data.text };
+      (state.settings.customThemes ||= []).push(theme);
+      state.settings.theme = 'custom:' + theme.id;
+      applySettings(); render(); saveSettings();
+      toast(t('te.imported', { name: theme.name }));
+    }).catch(() => toast(t('te.badFile'), true));
+    el.value = '';
+    return;
+  }
   if (el.dataset.change) changes[el.dataset.change]?.(el.value);
   if (el.dataset.bind && el.tagName === 'SELECT') setPath(el.dataset.bind, el.value);
-  if ('saveSettings' in el.dataset) saveSettings();
+  if ('saveSettings' in el.dataset) {
+    if (el.type === 'range') { applySettings(); if (el.id === 'bkkeep') render(); }
+    saveSettings();
+  }
 });
 
 // Своё меню по правой кнопке вместо системного «Назад / Обновить / Печать»
@@ -1804,6 +2570,7 @@ async function init() {
   try { state.dataDir = await api.dataDir(); } catch { /* без обложек тоже можно */ }
   try { state.accounts = await api.listAccounts(); } catch { /* без аккаунтов тоже можно жить */ }
   try { state.running = new Set(await api.runningInstances()); } catch { /* ничего */ }
+  try { state.msReady = await api.microsoftReady(); } catch { /* старый бэкенд */ }
   render();
   if (state.settings.checkUpdates) {
     api.checkUpdate().then((u) => {

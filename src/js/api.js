@@ -22,7 +22,7 @@ export const api = {
   duplicateInstance: (id, name) => call('duplicate_instance', { id, name: name || '' }),
   getLoaderVersions: (loader, gameVersion) => call('get_loader_versions', { loader, gameVersion }),
 
-  installProject: (id, projectId) => call('install_project', { id, projectId }),
+  installProject: (id, projectId, world) => call('install_project', { id, projectId, world: world || null }),
   installedProjects: (id) => call('installed_projects', { id }),
   checkModUpdates: (id) => call('check_mod_updates', { id }),
   applyModUpdates: (id, updates) => call('apply_mod_updates', { id, updates }),
@@ -41,6 +41,28 @@ export const api = {
   pickCover: (id) => call('pick_cover', { id }),
   coverFromScreenshot: (id, file) => call('cover_from_screenshot', { id, file }),
   clearCover: (id) => call('clear_cover', { id }),
+  listDatapacks: (id, world) => call('list_datapacks', { id, world }),
+  deleteDatapack: (id, world, file) => call('delete_datapack', { id, world, file }),
+  listBackups: (id) => call('list_backups', { id }),
+  makeBackup: (id, world) => call('make_backup', { id, world }),
+  deleteBackup: (id, file) => call('delete_backup', { id, file }),
+  restoreBackup: (id, file) => call('restore_backup', { id, file }),
+  pickBackground: () => call('pick_background'),
+  exportTheme: (name, json) => call('export_theme', { name, json }),
+  notify: (title, body) => call('notify', { title, body }),
+  statsSummary: () => call('stats_summary'),
+
+  findPrism: () => call('find_prism_instances'),
+  importPrism: (paths) => call('import_prism', { paths }),
+
+  accountSkin: (id) => call('account_skin', { id }),
+  listSkins: () => call('list_skins'),
+  importSkin: () => call('import_skin'),
+  saveSkinData: (dataUrlStr, name, slim) => call('save_skin_data', { dataUrlStr, name, slim }),
+  updateSkin: (file, name, slim) => call('update_skin', { file, name, slim }),
+  deleteSkin: (file) => call('delete_skin', { file }),
+  applySkin: (account, file) => call('apply_skin', { account, file }),
+  setCape: (account, cape) => call('set_cape', { account, cape: cape || null }),
 
   listMods: (id) => call('list_mods', { id }),
   toggleMod: (id, file) => call('toggle_mod', { id, file }),
@@ -51,6 +73,8 @@ export const api = {
   addElyAccount: (username, password, totp) => call('add_ely_account', { username, password, totp: totp || null }),
   setActiveAccount: (id) => call('set_active_account', { id }),
   removeAccount: (id) => call('remove_account', { id }),
+  microsoftReady: () => call('microsoft_ready'),
+  addMicrosoftAccount: () => call('add_microsoft_account'),
 
   launch: (id) => call('launch_instance', { id }),
   stop: (id) => call('stop_instance', { id }),
@@ -108,7 +132,9 @@ const store = {
 
 const DEFAULT_SETTINGS = {
   theme: 'sakura', language: 'ru', reduceMotion: false, hideOnLaunch: true,
-  checkUpdates: true, autoJava: true, curseforgeKey: '',
+  checkUpdates: true, autoJava: true, curseforgeKey: '', afterGameClose: 'restore',
+  defaultMemoryGb: 4, defaultJvmArgs: '', defaultWindowWidth: 1280, defaultWindowHeight: 720,
+  defaultFullscreen: false, defaultBackupWorlds: false, backupKeep: 5,
 };
 
 const mockRunning = new Set();
@@ -140,6 +166,7 @@ async function mockInvoke(cmd, args = {}) {
         loader: args.data.loader, tint: args.data.tint, memoryGb: 4, javaPath: '', windowWidth: 1280,
         windowHeight: 720, fullscreen: false, autoJoinServer: '', jvmArgs: '', preLaunchCommand: '',
         postExitCommand: '', wrapperCommand: '', envVars: '', showConsole: false, createdAt: Date.now(),
+        favorite: false, archived: false, folder: '', tags: [], notes: '', backupWorlds: false,
       };
       store.set('instances', [inst, ...list]);
       return inst;
@@ -204,6 +231,58 @@ async function mockInvoke(cmd, args = {}) {
     case 'delete_world': case 'open_world_folder': case 'open_screenshot': case 'delete_screenshot': return null;
     case 'list_screenshots': return [];
     case 'pick_cover': case 'cover_from_screenshot': case 'clear_cover': return store.get('instances', []).find((i) => i.id === args.id);
+
+    case 'list_datapacks': return store.get(`dp-${args.id}-${args.world}`, [{ file: 'terralith.zip', size: 2_400_000 }]);
+    case 'delete_datapack': store.set(`dp-${args.id}-${args.world}`, (await mockInvoke('list_datapacks', args)).filter((d) => d.file !== args.file)); return null;
+    case 'list_backups': return store.get('bk-' + args.id, []);
+    case 'make_backup': {
+      await sleep(400);
+      const file = `${args.world}__${Math.floor(Date.now() / 1000)}.zip`;
+      store.set('bk-' + args.id, [{ file, world: args.world, time: Date.now() / 1000, size: 12_000_000 }, ...store.get('bk-' + args.id, [])]);
+      return file;
+    }
+    case 'delete_backup': store.set('bk-' + args.id, store.get('bk-' + args.id, []).filter((b) => b.file !== args.file)); return null;
+    case 'restore_backup': await sleep(400); return args.file.split('__')[0];
+    case 'pick_background': return null;
+    case 'export_theme': return 'C:\\Users\\Мари\\Desktop\\' + args.name + '.spectia-theme.json';
+    case 'notify': return null;
+    case 'stats_summary': return { sessions: 0, totalSeconds: 0 };
+    case 'find_prism_instances': await sleep(300); return [
+      { path: 'C:/Prism/instances/Cozy', name: 'Уютная ферма', gameVersion: '1.20.1', loader: 'forge', loaderVersion: '1.20.1-47.4.28', size: 820_000_000, source: 'Prism Launcher' },
+      { path: 'C:/Prism/instances/Horror', name: 'Страшилки', gameVersion: '1.21.1', loader: 'neoforge', loaderVersion: '21.1.200', size: 410_000_000, source: 'Prism Launcher' },
+      { path: 'C:/Prism/instances/Vanilla', name: 'Просто ванилла', gameVersion: '26.3', loader: 'vanilla', loaderVersion: '', size: 90_000_000, source: 'Prism Launcher' },
+    ];
+    case 'import_prism': {
+      for (let n = 0; n < args.paths.length; n++) {
+        emit('prism-progress', { done: n, total: args.paths.length, name: args.paths[n] });
+        await sleep(500);
+        await mockInvoke('create_instance', { data: { name: args.paths[n].split('/').pop(), gameVersion: '1.20.1', loader: 'forge', tint: n % 6 } });
+      }
+      emit('prism-progress', { done: args.paths.length, total: args.paths.length });
+      return args.paths.length;
+    }
+    case 'microsoft_ready': return new URLSearchParams(location.search).has('ms');
+    case 'add_microsoft_account': {
+      await sleep(1200);
+      const s = store.get('accounts', { active: '', accounts: [] });
+      s.accounts = s.accounts.filter((a) => a.id !== 'ms-demo').concat({ id: 'ms-demo', name: 'MariPlays', kind: 'microsoft' });
+      s.active = 'ms-demo';
+      store.set('accounts', s);
+      return accountInfo();
+    }
+    case 'account_skin': return { image: '', slim: false, editable: args.id.startsWith('ms'), capes: args.id.startsWith('ms') ? [{ id: 'c1', alias: 'Migrator', image: '', active: false }] : [] };
+    case 'list_skins': return store.get('skins', []);
+    case 'import_skin': return null;
+    case 'save_skin_data': {
+      const list = [{ file: 'skin-' + Date.now() + '.png', name: args.name, slim: args.slim, image: args.dataUrlStr }, ...store.get('skins', [])];
+      store.set('skins', list); return list;
+    }
+    case 'update_skin': {
+      const list = store.get('skins', []).map((k) => (k.file === args.file ? { ...k, name: args.name, slim: args.slim } : k));
+      store.set('skins', list); return list;
+    }
+    case 'delete_skin': { const list = store.get('skins', []).filter((k) => k.file !== args.file); store.set('skins', list); return list; }
+    case 'apply_skin': case 'set_cape': await sleep(500); return null;
 
     case 'list_accounts': return accountInfo();
     case 'add_ely_account': {
