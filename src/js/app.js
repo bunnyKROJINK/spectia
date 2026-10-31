@@ -12,7 +12,7 @@ import { THEMES, THEME_ORDER, TINTS, applyTheme } from './themes.js';
 import { icon, heroArt } from './icons.js';
 import { searchModrinth } from './modrinth.js';
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];

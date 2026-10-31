@@ -2,7 +2,9 @@
 #
 # • Каждый раз, когда в ветку main приходит новый код, GitHub сам собирает .exe.
 #   Готовый файл лежит во вкладке Actions → нужная сборка → Artifacts.
-# • Если создать тег вида v0.1.0, установщик ещё и появится на странице Releases.
+# • Выпустить релиз: Actions → «Сборка» → Run workflow → галочка «Выпустить релиз».
+#   Текст релиза (и окошка обновления в лаунчере) берётся из RELEASE_NOTES.md.
+# • Если сборка упала, подробный лог сохраняется в ветку ci-logs.
 
 name: Сборка
 
@@ -21,9 +23,16 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
     steps:
       - uses: actions/checkout@v4
 
@@ -38,13 +47,22 @@ jobs:
           workspaces: src-tauri
 
       - name: Установка инструментов
-        run: npm install
+        run: npm install 2>&1 | tee -a ci.log
 
       - name: Проверка кода на Rust
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: |
+          set -o pipefail
+          cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee -a ci.log
 
       - name: Сборка установщика
-        run: npm run build
+        run: |
+          set -o pipefail
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "Ключ подписи не задан — собираем без файлов автообновления" | tee -a ci.log
+            npm run build -- --config '{"bundle":{"createUpdaterArtifacts":false}}' 2>&1 | tee -a ci.log
+          else
+            npm run build 2>&1 | tee -a ci.log
+          fi
 
       - name: Сохранить установщик
         uses: actions/upload-artifact@v4
@@ -52,21 +70,43 @@ jobs:
           name: Spectia-Windows
           path: src-tauri/target/release/bundle/nsis/*.exe
 
-      - name: Узнать версию
-        id: version
-        shell: bash
-        run: echo "v=$(node -p "require('./src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Подготовить релиз
+        id: rel
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+        run: |
+          set -e
+          V=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+          node .github/latest-json.mjs "$V"
+          {
+            cat RELEASE_NOTES.md
+            echo
+            echo "---"
+            echo "Скачайте **Spectia_${V}_x64-setup.exe** ниже и запустите его. Если у вас уже стоит Spectia 0.2.0 или новее, лаунчер обновится сам."
+            echo
+            echo "Если Windows покажет окно «Windows защитила ваш компьютер», нажмите «Подробнее» → «Выполнить в любом случае». Так бывает с любой новой программой без платной цифровой подписи."
+          } > release-body.md
 
       - name: Опубликовать релиз
         if: startsWith(github.ref, 'refs/tags/v') || inputs.release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.v }}
-          name: Spectia ${{ steps.version.outputs.v }}
+          tag_name: v${{ steps.rel.outputs.v }}
+          name: Spectia ${{ steps.rel.outputs.v }}
           target_commitish: ${{ github.sha }}
-          files: src-tauri/target/release/bundle/nsis/*.exe
-          body: |
-            Скачайте файл **Spectia_${{ steps.version.outputs.v }}_x64-setup.exe** ниже и запустите его.
+          body_path: release-body.md
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.sig
+            latest.json
 
-            Если Windows покажет окно «Windows защитила ваш компьютер», нажмите «Подробнее» → «Выполнить в любом случае». Так бывает с любой новой программой без платной цифровой подписи.
-          generate_release_notes: true
+      - name: Сохранить лог ошибки
+        if: failure()
+        run: |
+          mkdir -p ci-out && cp ci.log ci-out/ 2>/dev/null || echo "нет лога" > ci-out/ci.log
+          cd ci-out
+          git init -q -b ci-logs
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A && git commit -q -m "лог сборки ${{ github.run_id }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-logs

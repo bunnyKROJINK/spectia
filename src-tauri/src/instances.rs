@@ -110,6 +110,23 @@ fn instance_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     Ok(paths::instances_dir(app)?.join(id))
 }
 
+/// Папка сборки (для запуска игры).
+pub fn dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
+    let d = instance_path(app, id)?;
+    if !d.exists() {
+        return Err("такой сборки больше нет".into());
+    }
+    Ok(d)
+}
+
+/// Читает настройки одной сборки.
+pub fn read(app: &AppHandle, id: &str) -> Result<Instance, String> {
+    let text = std::fs::read_to_string(dir(app, id)?.join("instance.json")).map_err(|e| e.to_string())?;
+    let mut inst: Instance = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    inst.id = id.to_string();
+    Ok(inst)
+}
+
 fn write_instance(dir: &PathBuf, inst: &Instance) -> Result<(), String> {
     let text = serde_json::to_string_pretty(inst).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("instance.json"), text).map_err(|e| format!("не смогли сохранить сборку: {e}"))

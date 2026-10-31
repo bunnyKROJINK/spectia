@@ -32,14 +32,18 @@ impl Default for Settings {
     }
 }
 
+/// Настройки с диска (или по умолчанию, если файла нет или он повреждён).
+pub fn load(app: &AppHandle) -> Settings {
+    paths::settings_file(app)
+        .ok()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
-    let file = paths::settings_file(&app)?;
-    match std::fs::read_to_string(&file) {
-        // Если файл повреждён, просто начинаем с настроек по умолчанию.
-        Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_default()),
-        Err(_) => Ok(Settings::default()),
-    }
+    Ok(load(&app))
 }
 
 #[tauri::command]
