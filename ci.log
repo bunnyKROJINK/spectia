@@ -1,0 +1,54 @@
+
+added 2 packages, and audited 3 packages in 15s
+
+1 package is looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 514 packages to highest compatible versions
+[1m[92m      Adding[0m generic-array v0.14.7 [1m[93m(available: v0.14.9)[0m
+[1m[92m      Adding[0m reqwest v0.12.28 [1m[93m(available: v0.13.5)[0m
+[1m[92m      Adding[0m toml v0.8.2 [1m[93m(available: v0.8.23)[0m
+[1m[92m      Adding[0m toml_datetime v0.6.3 [1m[93m(available: v0.6.11)[0m
+[1m[92m      Adding[0m toml_edit v0.20.2 [1m[93m(available: v0.20.7)[0m
+[1m[92m      Adding[0m zip v2.6.1 [1m[93m(available: v9.1.3)[0m
+[1m[92m   Compiling[0m spectia v0.2.0 (D:\a\spectia\spectia\src-tauri)
+[1m[93mwarning[0m[1m[97m: fields `kind`, `assets`, and `inherits_from` are never read[0m
+  [1m[96m--> [0msrc\game.rs:32:9
+   [1m[96m|[0m
+[1m[96m29[0m [1m[96m|[0m pub struct VersionJson {
+   [1m[96m|[0m            [1m[96m-----------[0m [1m[96mfields in this struct[0m
+[1m[96m...[0m
+[1m[96m32[0m [1m[96m|[0m     pub kind: String,
+   [1m[96m|[0m         [1m[93m^^^^[0m
+[1m[96m...[0m
+[1m[96m42[0m [1m[96m|[0m     pub assets: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^[0m
+[1m[96m...[0m
+[1m[96m53[0m [1m[96m|[0m     pub inherits_from: Option<String>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `VersionJson` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: field `major_version` is never read[0m
+  [1m[96m--> [0msrc\game.rs:81:9
+   [1m[96m|[0m
+[1m[96m79[0m [1m[96m|[0m pub struct JavaVersion {
+   [1m[96m|[0m            [1m[96m-----------[0m [1m[96mfield in this struct[0m
+[1m[96m80[0m [1m[96m|[0m     pub component: String,
+[1m[96m81[0m [1m[96m|[0m     pub major_version: u32,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `JavaVersion` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+[1m[93mwarning[0m: `spectia` (lib test) generated 2 warnings (1 duplicate)
+[1m[93mwarning[0m: `spectia` (lib) generated 2 warnings (1 duplicate)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 51.88s
+[1m[92m     Running[0m unittests src\lib.rs (src-tauri\target\debug\deps\spectia_lib-c2ff6b948b0be0a1.exe)
+[1m[91merror[0m: test failed, to rerun pass `--lib`
+
+Caused by:
+  process didn't exit successfully: `D:\a\spectia\spectia\src-tauri\target\debug\deps\spectia_lib-c2ff6b948b0be0a1.exe` (exit code: 0xc0000139, STATUS_ENTRYPOINT_NOT_FOUND)
+[1m[92mnote[0m: test exited abnormally; to see the full output pass --no-capture to the harness.
