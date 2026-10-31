@@ -166,7 +166,7 @@ pub async fn install_project(app: AppHandle, id: String, project_id: String, wor
 
 /// Датапак ставится в папку datapacks конкретного мира
 async fn install_datapack(inst_dir: &Path, game: &str, project_id: &str, world: &str) -> Result<InstallResult, String> {
-    if world.is_empty() || world.contains(['/', '\']) || world.contains("..") {
+    if world.is_empty() || world.contains(['/', '\\']) || world.contains("..") {
         return Err("неправильное имя мира".into());
     }
     let world_dir = inst_dir.join("minecraft").join("saves").join(world);
@@ -178,7 +178,7 @@ async fn install_datapack(inst_dir: &Path, game: &str, project_id: &str, world: 
         .await?
         .ok_or_else(|| format!("NO_COMPATIBLE_VERSION:{}", project.title))?;
     let file = version.primary_file().ok_or("у этой версии нет файла")?;
-    if file.filename.contains(['/', '\']) || file.filename.contains("..") {
+    if file.filename.contains(['/', '\\']) || file.filename.contains("..") {
         return Err("странное имя файла".into());
     }
     net::download(&file.url, &world_dir.join("datapacks").join(&file.filename), file.hashes.get("sha1").map(String::as_str)).await?;
