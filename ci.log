@@ -1,0 +1,406 @@
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 524 packages to highest compatible versions
+[1m[92m      Adding[0m base64 v0.22.1 [1m[33m(available: v0.23.1)[0m
+[1m[92m      Adding[0m generic-array v0.14.7 [1m[33m(available: v0.14.9)[0m
+[1m[92m      Adding[0m reqwest v0.12.28 [1m[33m(available: v0.13.5)[0m
+[1m[92m      Adding[0m sha2 v0.10.9 [1m[33m(available: v0.11.1)[0m
+[1m[92m      Adding[0m toml v0.8.2 [1m[33m(available: v0.8.23)[0m
+[1m[92m      Adding[0m toml_datetime v0.6.3 [1m[33m(available: v0.6.11)[0m
+[1m[92m      Adding[0m toml_edit v0.20.2 [1m[33m(available: v0.20.7)[0m
+[1m[92m      Adding[0m zip v2.6.1 [1m[33m(available: v9.2.0)[0m
+[1m[92m   Compiling[0m spectia v1.0.0 (/home/runner/work/spectia/spectia/src-tauri)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 24.26s
+[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/spectia_lib-ea5ed4cc81d23140)
+
+running 30 tests
+test curseforge::tests::loaders ... ok
+test game::tests::keys ... ok
+test game::tests::maven ... ok
+test game::tests::args_with_rules ... ok
+test game::tests::rules ... ok
+test java::tests::speed_modes ... ok
+test launch::tests::env ... ok
+test java::tests::reads_java_major_from_release ... ok
+test launch::tests::fabric_end_to_end ... ignored
+test launch::tests::forge_end_to_end ... ignored
+test launch::tests::forge_legacy_end_to_end ... ignored
+test launch::tests::neoforge_end_to_end ... ignored
+test instances::tests::slug_works_for_russian ... ok
+test launch::tests::vanilla_end_to_end ... ignored
+test launch::tests::split ... ok
+test loaders::tests::version_order ... ok
+test loaders::tests::neoforge_prefixes ... ok
+test microsoft::tests::encode_form ... ok
+test microsoft::tests::decode ... ok
+test modrinth::tests::encode ... ok
+test modrinth::tests::keys ... ok
+test mrpack::tests::modrinth_install_and_export_end_to_end ... ignored
+test mods::tests::toml ... ok
+test history::tests::notices_manual_changes ... ok
+test mrpack::tests::safe_paths ... ok
+test music::tests::names ... ok
+test news::tests::tolerant ... ok
+test skins::tests::png_header ... ok
+test toolbox::memory_tests::recommendations_grow_with_mods ... ok
+test prism::tests::mmc_pack ... ok
+
+test result: ok. 24 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/spectia-6cc16d80ca4104a0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+[1m[92m   Doc-tests[0m spectia_lib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+[1m[92m     Running[0m unittests src/lib.rs (src-tauri/target/debug/deps/spectia_lib-ea5ed4cc81d23140)
+
+running 6 tests
+test launch::tests::fabric_end_to_end ... ===== fabric 26.3 =====
+fabric 0.20.1
+Java: /usr/lib/jvm/temurin-25-jdk-amd64/bin/java  библиотек: 74
+----- лог игры (fabric 26.3) -----
+	at net.fabricmc.loader.impl.game.minecraft.MinecraftGameProvider.launch(MinecraftGameProvider.java:517)
+	at net.fabricmc.loader.impl.launch.knot.Knot.launch(Knot.java:72)
+	at net.fabricmc.loader.impl.launch.knot.KnotClient.main(KnotClient.java:23)
+
+-- System Details --
+Details:
+	Minecraft Version: 26.3
+	Minecraft Version ID: 26.3
+	Operating System: Linux (amd64) version 7.0.0-1017-azure
+	Java Version: 25.0.5, Eclipse Adoptium
+	Java VM Version: OpenJDK 64-Bit Server VM (mixed mode, sharing), Eclipse Adoptium
+	Memory: 179224576 bytes (170 MiB) / 536870912 bytes (512 MiB) up to 3221225472 bytes (3072 MiB)
+	Memory (heap): init: 512MiB, used: 339MiB, committed: 512MiB, max: 3072MiB
+	Memory (non-heap): init: 007MiB, used: 113MiB, committed: 115MiB, max: 000MiB
+	CPUs: 4
+	Processor Vendor: AuthenticAMD
+	Processor Name: AMD EPYC 7763 64-Core Processor
+	Identifier: AuthenticAMD Family 25 Model 1 Stepping 1
+	Microarchitecture: Zen 3
+	Frequency (GHz): -0.00
+	Number of physical packages: 1
+	Number of physical CPUs: 2
+	Number of logical CPUs: 4
+	Graphics card #0 name: hyperv_drmdrmfb
+	Graphics card #0 vendor: unknown
+	Graphics card #0 VRAM (MiB): 0.00
+	Graphics card #0 deviceId: unknown
+	Graphics card #0 versionInfo: unknown
+	Virtual memory max (MiB): 11063.95
+	Virtual memory used (MiB): 1833.92
+	Swap memory total (MiB): 3072.00
+	Swap memory used (MiB): 0.00
+	Space in storage for jna.tmpdir (MiB): available: 81337.13, total: 147718.61
+	Space in storage for org.lwjgl.system.SharedLibraryExtractPath (MiB): available: 81337.13, total: 147718.61
+	Space in storage for io.netty.native.workdir (MiB): available: 81337.13, total: 147718.61
+	Space in storage for java.io.tmpdir (MiB): available: 81337.13, total: 147718.61
+	Space in storage for workdir (MiB): available: 81337.13, total: 147718.61
+	Operating System Version: GNU/Linux Ubuntu 24.04.5 LTS (Noble Numbat) build 7.0.0-1017-azure
+	Process Elevated: false
+	Process Loads: Uptime: 12s, user: 21s (176.82%), kernel: 1s (6.25%), total: 22s (183.08%)
+	Process Virtual Size (MiB): 6563.05
+	Process Resident Size (MiB): 713.45
+	JVM Flags: 3 total; -Xmx3072M -Xms512M -XX:StackShadowPages=32
+	Debug Flags: 0 total; 
+	Launched Version: fabric-loader-0.20.1-26.3
+	Launcher name: Spectia
+	Backend library: LWJGL version 3.4.3-snapshot
+	Window size: <not initialized>
+	Surface Info: <no surface>
+	SDL Platform: Linux
+	Graphics Device: <none>
+	GL debug messages: <no renderer available>
+	Is Modded: Definitely; Client brand changed to 'fabric'
+	Universe: 404
+	Type: Client
+	Locale: en
+	System encoding: UTF-8
+	File encoding: UTF-8
+	CPU: 4x AMD EPYC 7763 64-Core Processor
+#@!@# Game crashed! Crash report saved to: #@!@# /tmp/spectia-it/game-fabric-26.3/crash-reports/crash-2026-10-31_21.25.28-client.txt
+Признак запуска: Some("with Fabric Loader")
+ok
+test launch::tests::forge_end_to_end ... ===== forge 1.20.1 =====
+forge 1.20.1-47.4.28
+Java: /usr/lib/jvm/temurin-17-jdk-amd64/bin/java  библиотек: 82
+----- лог игры (forge 1.20.1) -----
+
+
+Failed to initialize graphics window with current settings.
+
+
+Failure details:
+We are unable to initialize the graphics system.
+glfwInit failed.
+
+
+If you click yes, we will try and open https://links.minecraftforge.net/early-display-errors in your default browser
+y/n: 
+
+
+Failed to initialize graphics window with current settings.
+
+
+Failure details:
+We are unable to initialize the graphics system.
+glfwInit failed.
+
+
+If you click yes, we will try and open https://links.minecraftforge.net/early-display-errors in your default browser
+y/n: 
+
+
+Failed to initialize graphics window with current settings.
+
+
+Failure details:
+We are unable to initialize the graphics system.
+glfwInit failed.
+
+
+If you click yes, we will try and open https://links.minecraftforge.net/early-display-errors in your default browser
+y/n: 
+
+
+Failed to initialize graphics window with current settings.
+
+
+Failure details:
+We are unable to initialize the graphics system.
+glfwInit failed.
+
+
+If you click yes, we will try and open https://links.minecraftforge.net/early-display-errors in your default browser
+y/n: 
+
+
+Failed to initialize graphics window with current settings.
+
+
+Failure details:
+We are unable to initialize the graphics system.
+glfwInit failed.
+
+
+If you click yes, we will try and open https://links.minecraftforge.net/early-display-errors in your default browser
+y/n: 
+Признак запуска: Some("ModLauncher running")
+ok
+test launch::tests::forge_legacy_end_to_end ... ===== forge 1.12.2 =====
+forge 1.12.2-14.23.5.2859
+Java: /usr/lib/jvm/temurin-8-jdk-amd64/bin/java  библиотек: 53
+----- лог игры (forge 1.12.2) -----
+	at net.minecraft.launchwrapper.Launch.main(Launch.java:28)
+Caused by: java.lang.RuntimeException: org.lwjgl.LWJGLException: Could not open X display connection
+	at org.lwjgl.opengl.Display.<clinit>(Display.java:141)
+	... 10 more
+Caused by: org.lwjgl.LWJGLException: Could not open X display connection
+	at org.lwjgl.opengl.LinuxDisplay.openDisplay(Native Method)
+	at org.lwjgl.opengl.LinuxDisplay.incDisplay(LinuxDisplay.java:305)
+	at org.lwjgl.opengl.LinuxDisplay.internAtom(LinuxDisplay.java:629)
+	at org.lwjgl.opengl.LinuxDisplay.init(LinuxDisplay.java:734)
+	at org.lwjgl.opengl.Display.<clinit>(Display.java:138)
+	... 10 more
+
+
+A detailed walkthrough of the error, its code path and all known details is as follows:
+---------------------------------------------------------------------------------------
+
+-- Head --
+Thread: Client thread
+Stacktrace:
+	at net.minecraft.client.Minecraft.func_175594_ao(Minecraft.java:680)
+	at net.minecraft.client.Minecraft.func_71384_a(Minecraft.java:456)
+
+-- Initialization --
+Details:
+Stacktrace:
+	at net.minecraft.client.Minecraft.func_99999_d(Minecraft.java:378)
+	at net.minecraft.client.main.Main.main(SourceFile:123)
+	at sun.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at sun.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at sun.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.lang.reflect.Method.invoke(Method.java:498)
+	at net.minecraft.launchwrapper.Launch.launch(Launch.java:135)
+	at net.minecraft.launchwrapper.Launch.main(Launch.java:28)
+
+-- System Details --
+Details:
+	Minecraft Version: 1.12.2
+	Operating System: Linux (amd64) version 7.0.0-1017-azure
+	Java Version: 1.8.0_504, Temurin
+	Java VM Version: OpenJDK 64-Bit Server VM (mixed mode), Temurin
+	Memory: 354719464 bytes (338 MB) / 927989760 bytes (885 MB) up to 2863661056 bytes (2731 MB)
+	JVM Flags: 2 total; -Xmx3072M -Xms512M
+	IntCache: cache: 0, tcache: 0, allocated: 0, tallocated: 0
+	FML: 
+	Loaded coremods (and transformers): 
+	Launched Version: 1.12.2-forge-14.23.5.2859
+	LWJGL: 2.9.4
+	OpenGL: ~~ERROR~~ RuntimeException: No OpenGL context found in the current thread.
+	GL Caps: 
+	Using VBOs: Yes
+	Is Modded: Definitely; Client brand changed to 'fml,forge'
+	Type: Client (map_client.txt)
+	Resource Packs: 
+	Current Language: ~~ERROR~~ NullPointerException: null
+	Profiler Position: N/A (disabled)
+	CPU: <unknown>]]></log4j:Message>
+  </log4j:Event>
+  <log4j:Event logger="STDOUT" timestamp="1793482014827" level="INFO" thread="Client thread">
+    <log4j:Message><![CDATA[[net.minecraft.init.Bootstrap:func_179870_a:553]: #@!@# Game crashed! Crash report saved to: #@!@# /tmp/spectia-it/game-forge-1.12.2/crash-reports/crash-2026-10-31_21.26.54-client.txt]]></log4j:Message>
+  </log4j:Event>
+Признак запуска: Some("Setting user: SpectiaTest")
+ok
+test launch::tests::neoforge_end_to_end ... ===== neoforge 26.3 =====
+neoforge 26.3.0.100
+Java: /usr/lib/jvm/temurin-25-jdk-amd64/bin/java  библиотек: 93
+----- лог игры (neoforge 26.3) -----
+	Number of physical packages: 1
+	Number of physical CPUs: 2
+	Number of logical CPUs: 4
+	Graphics card #0 name: hyperv_drmdrmfb
+	Graphics card #0 vendor: unknown
+	Graphics card #0 VRAM (MiB): 0.00
+	Graphics card #0 deviceId: unknown
+	Graphics card #0 versionInfo: unknown
+	Virtual memory max (MiB): 11063.95
+	Virtual memory used (MiB): 2082.31
+	Swap memory total (MiB): 3072.00
+	Swap memory used (MiB): 0.00
+	Space in storage for jna.tmpdir (MiB): available: 78779.19, total: 147718.61
+	Space in storage for org.lwjgl.system.SharedLibraryExtractPath (MiB): available: 78779.19, total: 147718.61
+	Space in storage for io.netty.native.workdir (MiB): available: 78779.19, total: 147718.61
+	Space in storage for java.io.tmpdir (MiB): available: 78779.19, total: 147718.61
+	Space in storage for workdir (MiB): available: 78779.19, total: 147718.61
+	Operating System Version: GNU/Linux Ubuntu 24.04.5 LTS (Noble Numbat) build 7.0.0-1017-azure
+	Process Elevated: false
+	Process Loads: Uptime: 12s, user: 29s (243.41%), kernel: 1s (7.85%), total: 29s (251.26%)
+	Process Virtual Size (MiB): 6829.09
+	Process Resident Size (MiB): 887.97
+	JVM Flags: 3 total; -Xmx3072M -Xms512M -XX:StackShadowPages=32
+	Debug Flags: 0 total; 
+	Launched Version: neoforge-26.3.0.100
+	Launcher name: Spectia
+	Backend library: LWJGL version 3.4.3+4
+	Window size: <not initialized>
+	Surface Info: <no surface>
+	SDL Platform: Linux
+	Graphics Device: <none>
+	GL debug messages: <no renderer available>
+	Is Modded: Definitely; Client brand changed to 'neoforge'
+	Universe: 404
+	Type: Client
+	Locale: en
+	System encoding: UTF-8
+	File encoding: UTF-8
+	CPU: 4x AMD EPYC 7763 64-Core Processor
+	Class Processors: 
+		04.73%: neoforge:access_transformer
+		00.00%: neoforge:mixin_frame_context
+		00.00%: neoforge:computing_frames (marker)
+		00.00%: neoforge:runtime_enum_extender
+		00.08%: neoforge:mixin
+		00.00%: neoforge:simple_processors_default (marker)
+		00.02%: neoforge.coremods:field_to_getter.net.minecraft.world.level.biome.biome
+		00.02%: neoforge.coremods:field_to_getter.net.minecraft.world.level.block.flowerpotblock
+		00.02%: neoforge.coremods:field_to_getter.net.minecraft.world.level.levelgen.structure.structure
+		00.34%: neoforge.coremods:method_redirector
+	Mod List: 
+		minecraft-client-patched-26.3.0.100.jar           |Minecraft                     |minecraft                     |26.3                |Manifest: 627f103c705cff9f55bd7884c9c13cf3a0c379956a1722c902c4fdea2347c126
+		neoforge-26.3.0.100-universal.jar                 |NeoForge                      |neoforge                      |26.3.0.100          |Manifest: 41dd12f8765f7237d9ebe7be5cb2c84ecb4eede70ed66968c1a57e87d60f4322
+	Crash Report UUID: 6c10e5f0-169b-4604-adee-b4d7602557c8
+	FML: 12.0.12
+	NeoForge: 26.3.0.100
+  <log4j:Event logger="net.neoforged.neoforge.common.NeoForgeMod" timestamp="1793482036673" level="FATAL" thread="Render thread">
+    <log4j:Message><![CDATA[Preparing crash report with UUID bdeeaba2-192a-4da3-b522-7bc45713f37f]]></log4j:Message>
+  </log4j:Event>
+#@!@# Game crashed! Crash report saved to: #@!@# /tmp/spectia-it/game-neoforge-26.3/crash-reports/crash-2026-10-31_21.27.16-client.txt
+Признак запуска: Some("Setting user: SpectiaTest")
+ok
+test launch::tests::vanilla_end_to_end ... ===== vanilla 26.3 =====
+Java: /usr/lib/jvm/temurin-25-jdk-amd64/bin/java  библиотек: 67
+----- лог игры (vanilla 26.3) -----
+	Modules: 
+Stacktrace:
+	at net.minecraft.client.main.Main.main(Main.java:278)
+
+-- System Details --
+Details:
+	Minecraft Version: 26.3
+	Minecraft Version ID: 26.3
+	Operating System: Linux (amd64) version 7.0.0-1017-azure
+	Java Version: 25.0.5, Eclipse Adoptium
+	Java VM Version: OpenJDK 64-Bit Server VM (mixed mode, sharing), Eclipse Adoptium
+	Memory: 246415360 bytes (235 MiB) / 536870912 bytes (512 MiB) up to 3221225472 bytes (3072 MiB)
+	Memory (heap): init: 512MiB, used: 276MiB, committed: 512MiB, max: 3072MiB
+	Memory (non-heap): init: 007MiB, used: 109MiB, committed: 111MiB, max: 000MiB
+	CPUs: 4
+	Processor Vendor: AuthenticAMD
+	Processor Name: AMD EPYC 7763 64-Core Processor
+	Identifier: AuthenticAMD Family 25 Model 1 Stepping 1
+	Microarchitecture: Zen 3
+	Frequency (GHz): -0.00
+	Number of physical packages: 1
+	Number of physical CPUs: 2
+	Number of logical CPUs: 4
+	Graphics card #0 name: hyperv_drmdrmfb
+	Graphics card #0 vendor: unknown
+	Graphics card #0 VRAM (MiB): 0.00
+	Graphics card #0 deviceId: unknown
+	Graphics card #0 versionInfo: unknown
+	Virtual memory max (MiB): 11063.95
+	Virtual memory used (MiB): 1876.10
+	Swap memory total (MiB): 3072.00
+	Swap memory used (MiB): 0.00
+	Space in storage for jna.tmpdir (MiB): available: 78754.98, total: 147718.61
+	Space in storage for org.lwjgl.system.SharedLibraryExtractPath (MiB): available: 78754.98, total: 147718.61
+	Space in storage for io.netty.native.workdir (MiB): available: 78754.98, total: 147718.61
+	Space in storage for java.io.tmpdir (MiB): available: 78754.98, total: 147718.61
+	Space in storage for workdir (MiB): available: 78754.98, total: 147718.61
+	Operating System Version: GNU/Linux Ubuntu 24.04.5 LTS (Noble Numbat) build 7.0.0-1017-azure
+	Process Elevated: false
+	Process Loads: Uptime: 9s, user: 21s (244.99%), kernel: 1s (7.37%), total: 22s (252.36%)
+	Process Virtual Size (MiB): 6693.07
+	Process Resident Size (MiB): 687.08
+	JVM Flags: 3 total; -Xmx3072M -Xms512M -XX:StackShadowPages=32
+	Debug Flags: 0 total; 
+	Launched Version: 26.3
+	Launcher name: Spectia
+	Backend library: LWJGL version 3.4.3+4
+	Window size: <not initialized>
+	Surface Info: <no surface>
+	SDL Platform: Linux
+	Graphics Device: <none>
+	GL debug messages: <no renderer available>
+	Is Modded: Probably not. Client jar signature and brand is untouched
+	Universe: 404
+	Type: Client
+	Locale: en
+	System encoding: UTF-8
+	File encoding: UTF-8
+	CPU: 4x AMD EPYC 7763 64-Core Processor
+#@!@# Game crashed! Crash report saved to: #@!@# /tmp/spectia-it/game-vanilla-26.3/crash-reports/crash-2026-10-31_21.27.33-client.txt
+Признак запуска: Some("Setting user: SpectiaTest")
+ok
+test mrpack::tests::modrinth_install_and_export_end_to_end ... Установлено: ["Iris Shaders", "Sodium"]
+Файлы: ["sodium-fabric-0.8.13+mc1.21.1.jar", "iris-fabric-1.8.14-beta.1+mc1.21.1.jar"]
+В .mrpack ссылок на моды: 2
+ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 164.74s
+
+[1m[92m     Running[0m unittests src/main.rs (src-tauri/target/debug/deps/spectia-6cc16d80ca4104a0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
