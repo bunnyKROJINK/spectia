@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
-use crate::{instances, net};
+use crate::{history, instances, net};
 
 const API: &str = "https://api.modrinth.com/v2";
 
@@ -182,6 +182,7 @@ async fn install_datapack(inst_dir: &Path, game: &str, project_id: &str, world: 
         return Err("странное имя файла".into());
     }
     net::download(&file.url, &world_dir.join("datapacks").join(&file.filename), file.hashes.get("sha1").map(String::as_str)).await?;
+    history::log(inst_dir, "installed", &project.title, &format!("datapack → {world}"));
     Ok(InstallResult { installed: vec![project.title] })
 }
 
@@ -217,6 +218,7 @@ pub async fn install_into(inst_dir: &Path, game: &str, loader: &str, project_id:
         }
         let path = game_dir.join(folder).join(&file.filename);
         net::download(&file.url, &path, file.hashes.get("sha1").map(String::as_str)).await?;
+        history::log(inst_dir, "installed", &project.title, &format!("{folder}/{}", file.filename));
         index.insert(
             index_key(folder, &file.filename),
             ContentEntry { project_id: pid.clone(), version_id: version.id.clone(), title: project.title.clone() },
@@ -353,13 +355,125 @@ pub async fn apply_mod_updates(app: AppHandle, id: String, updates: Vec<ModUpdat
             ContentEntry {
                 project_id: u.project_id.clone(),
                 version_id: u.version_id.clone(),
-                title: old_entry.map(|e| e.title).unwrap_or(u.name.clone()),
+                title: old_entry.as_ref().map(|e| e.title.clone()).filter(|t| !t.is_empty()).unwrap_or(u.name.clone()),
             },
         );
+        let title = old_entry.map(|e| e.title).filter(|t| !t.is_empty()).unwrap_or(u.name.clone());
+        history::log(&dir, "updated", &title, &format!("{} → {}", u.current, u.latest));
         done += 1;
     }
     write_index(&dir, &index)?;
     Ok(done)
+}
+
+/// Удалить то, что поставили из каталога (кнопка-корзинка рядом с «Установлено»)
+#[tauri::command]
+pub fn remove_project(app: AppHandle, id: String, project_id: String) -> Result<Vec<String>, String> {
+    let dir = instances::dir(&app, &id)?;
+    let game = dir.join("minecraft");
+    let mut index = read_index(&dir);
+    let keys: Vec<String> = index.iter().filter(|(_, e)| e.project_id == project_id).map(|(k, _)| k.clone()).collect();
+    let mut removed = Vec::new();
+    for key in keys {
+        let Some(rel) = Path::new(&key).components().all(|c| matches!(c, std::path::Component::Normal(_))).then(|| game.join(&key)) else { continue };
+        let mut gone = false;
+        for path in [rel.clone(), PathBuf::from(format!("{}.disabled", rel.to_string_lossy()))] {
+            if path.is_file() && std::fs::remove_file(&path).is_ok() {
+                gone = true;
+            }
+        }
+        let entry = index.remove(&key).unwrap_or_default();
+        let title = if entry.title.is_empty() { history::pretty(key.rsplit('/').next().unwrap_or(&key)) } else { entry.title };
+        if gone {
+            history::log(&dir, "removed", &title, &key);
+            removed.push(title);
+        }
+    }
+    write_index(&dir, &index)?;
+    Ok(removed)
+}
+
+// ---------- Зависимости ----------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepProblem {
+    /// missing — нужного мода нет; conflict — стоит мод, с которым этот не дружит
+    pub kind: String,
+    pub project_id: String,
+    pub title: String,
+    /// Кому он нужен (или с кем конфликтует)
+    pub needed_by: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct MrProjectShort {
+    id: String,
+    title: String,
+}
+
+/// Проверяет, все ли зависимости модов на месте. Опирается на данные Modrinth:
+/// моды, которых там нет, проверить не получится — их просто пропускаем.
+#[tauri::command]
+pub async fn check_dependencies(app: AppHandle, id: String) -> Result<Vec<DepProblem>, String> {
+    let dir = instances::dir(&app, &id)?;
+    let mods = dir.join("minecraft").join("mods");
+    // Только включённые моды: выключенные игра не видит
+    let hashes: HashMap<String, String> = hash_mods(&mods).into_iter().filter(|(_, f)| !f.ends_with(".disabled")).collect();
+    if hashes.is_empty() {
+        return Ok(vec![]);
+    }
+    let keys: Vec<&String> = hashes.keys().collect();
+    let versions: HashMap<String, MrVersion> =
+        post_json(&format!("{API}/version_files"), &serde_json::json!({ "hashes": keys, "algorithm": "sha1" })).await?;
+    let present: HashSet<String> = versions.values().map(|v| v.project_id.clone()).collect();
+    let titles_of_present: HashMap<String, String> = {
+        let ids: Vec<&String> = present.iter().collect();
+        let list: Vec<MrProjectShort> = if ids.is_empty() {
+            vec![]
+        } else {
+            net::fetch_json(&format!("{API}/projects?ids={}", urlencode(&serde_json::to_string(&ids).unwrap_or_default()))).await.unwrap_or_default()
+        };
+        list.into_iter().map(|p| (p.id, p.title)).collect()
+    };
+
+    // project_id → (вид проблемы, кому нужен)
+    let mut problems: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for v in versions.values() {
+        let who = titles_of_present.get(&v.project_id).cloned().unwrap_or_else(|| v.name.clone());
+        for d in &v.dependencies {
+            let Some(pid) = &d.project_id else { continue };
+            let kind = match d.dependency_type.as_str() {
+                "required" if !present.contains(pid) => "missing",
+                "incompatible" if present.contains(pid) => "conflict",
+                _ => continue,
+            };
+            problems.entry((kind.to_string(), pid.clone())).or_default().push(who.clone());
+        }
+    }
+    if problems.is_empty() {
+        return Ok(vec![]);
+    }
+    let ids: Vec<&String> = problems.keys().map(|(_, p)| p).collect();
+    let names: HashMap<String, String> = net::fetch_json::<Vec<MrProjectShort>>(&format!(
+        "{API}/projects?ids={}",
+        urlencode(&serde_json::to_string(&ids).unwrap_or_default())
+    ))
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|p| (p.id, p.title))
+    .collect();
+    let mut out: Vec<DepProblem> = problems
+        .into_iter()
+        .map(|((kind, pid), mut who)| {
+            who.sort();
+            who.dedup();
+            DepProblem { title: names.get(&pid).cloned().unwrap_or_else(|| titles_of_present.get(&pid).cloned().unwrap_or(pid.clone())), kind, project_id: pid, needed_by: who }
+        })
+        .collect();
+    out.sort_by(|a, b| a.kind.cmp(&b.kind).then(a.title.cmp(&b.title)));
+    Ok(out)
 }
 
 pub async fn post_json<T: serde::de::DeserializeOwned>(url: &str, body: &serde_json::Value) -> Result<T, String> {

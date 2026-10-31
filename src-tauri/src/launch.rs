@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::{accounts, content, game, instances, java, loaders, net, paths, settings, stats};
+use crate::{accounts, content, discord, game, history, instances, java, loaders, net, paths, settings, stats};
 
 const AUTHLIB_INJECTOR_URL: &str = "https://authlib-injector.yushi.moe/artifact/latest.json";
 
@@ -71,6 +71,7 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
     let inst_dir = instances::dir(&app, &id)?;
     let game_dir = inst_dir.join("minecraft");
     std::fs::create_dir_all(&game_dir).map_err(|e| e.to_string())?;
+    history::detect_external(&inst_dir);
 
     progress.stage("version", 0, 1);
     let vanilla = game::load_version(&data, &inst.game_version).await?;
@@ -168,6 +169,24 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
     let keep = settings.backup_keep;
     let session_start = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let (inst_name, inst_version, inst_loader) = (inst.name.clone(), inst.game_version.clone(), inst.loader.clone());
+
+    // Статус в Discord (если не выключен в настройках)
+    let discord_on = settings.extra.get("discord").and_then(|v| v.as_bool()).unwrap_or(true);
+    if discord_on {
+        let hide_name = settings.extra.get("discordHideName").and_then(|v| v.as_bool()).unwrap_or(false);
+        let loader_name = match inst.loader.as_str() {
+            "fabric" => " · Fabric",
+            "forge" => " · Forge",
+            "neoforge" => " · NeoForge",
+            "quilt" => " · Quilt",
+            _ => "",
+        };
+        discord::send(discord::Msg::Playing {
+            details: format!("Minecraft {}{loader_name}", inst.game_version),
+            state: if hide_name { String::new() } else { inst.name.clone() },
+            start: session_start,
+        });
+    }
     std::thread::spawn(move || {
         let started = Instant::now();
         let code = loop {
@@ -179,6 +198,9 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
         };
         if let Ok(mut map) = app.state::<Running>().0.lock() {
             map.remove(&id);
+        }
+        if discord_on {
+            discord::send(discord::Msg::Clear);
         }
         let seconds = started.elapsed().as_secs();
         instances::add_play_time(&app, &id, seconds);
@@ -242,7 +264,7 @@ fn build_args(c: &Ctx) -> Vec<String> {
     vars.insert("auth_session", format!("token:{}:{}", account.access_token, account.id));
     vars.insert("auth_xuid", "0".into());
     vars.insert("clientid", "0".into());
-    vars.insert("user_type", if account.kind == "microsoft" { "msa" } else { "mojang" }.into());
+    vars.insert("user_type", if account.kind == "microsoft" || account.kind == "prism" { "msa" } else { "mojang" }.into());
     vars.insert("user_properties", "{}".into());
     vars.insert("version_name", version.id.clone());
     vars.insert("version_type", "Spectia".into());
@@ -410,6 +432,40 @@ fn log_tail(path: &Path, lines: usize) -> String {
 pub fn read_launch_log(app: AppHandle, id: String) -> Result<String, String> {
     let path = instances::dir(&app, &id)?.join("launcher.log");
     Ok(log_tail(&path, 400))
+}
+
+#[derive(serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GameLogs {
+    /// Всё, что игра писала в консоль при последнем запуске из Spectia
+    pub launcher: String,
+    /// logs/latest.log самой игры
+    pub latest: String,
+    /// Последний отчёт о вылете (crash-reports), если есть
+    pub crash: String,
+    pub crash_name: String,
+    pub crash_time: u64,
+}
+
+/// Логи для вкладки «Логи» и для Spectia Doctor
+#[tauri::command]
+pub fn game_logs(app: AppHandle, id: String) -> Result<GameLogs, String> {
+    let dir = instances::dir(&app, &id)?;
+    let game = dir.join("minecraft");
+    let mut out = GameLogs { launcher: log_tail(&dir.join("launcher.log"), 3000), latest: log_tail(&game.join("logs").join("latest.log"), 3000), ..Default::default() };
+    if let Ok(rd) = std::fs::read_dir(game.join("crash-reports")) {
+        let newest = rd
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".txt"))
+            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e)))
+            .max_by_key(|(t, _)| *t);
+        if let Some((t, e)) = newest {
+            out.crash = log_tail(&e.path(), 600);
+            out.crash_name = e.file_name().to_string_lossy().into_owned();
+            out.crash_time = t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

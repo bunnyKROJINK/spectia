@@ -5,7 +5,10 @@
 
 mod accounts;
 mod content;
+mod curseforge;
+mod discord;
 mod game;
+mod history;
 mod instances;
 mod java;
 mod launch;
@@ -14,6 +17,8 @@ mod microsoft;
 mod modrinth;
 mod mods;
 mod mrpack;
+mod music;
+mod news;
 mod net;
 mod paths;
 mod prism;
@@ -22,6 +27,7 @@ mod skins;
 mod stats;
 mod updater;
 mod versions;
+mod window;
 
 pub fn run() {
     tauri::Builder::default()
@@ -29,6 +35,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .manage(window::Saved::default())
         .manage(launch::Running::default())
         .invoke_handler(tauri::generate_handler![
             settings::get_settings,
@@ -85,6 +92,18 @@ pub fn run() {
             prism::find_prism_instances,
             prism::import_prism,
             stats::stats_summary,
+            stats::stats_sessions,
+            prism::find_prism_accounts,
+            accounts::add_prism_account,
+            history::mod_history,
+            modrinth::remove_project,
+            modrinth::check_dependencies,
+            music::list_music,
+            news::minecraft_news,
+            news::patch_note_body,
+            launch::game_logs,
+            window::set_mini,
+            mrpack::import_pack,
             accounts::list_accounts,
             accounts::add_ely_account,
             accounts::set_active_account,

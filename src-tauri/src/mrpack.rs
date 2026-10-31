@@ -206,6 +206,63 @@ pub async fn import_mrpack(app: AppHandle, path: Option<String>) -> Result<Optio
     import_file(&app, &file, None).await.map(Some)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportOutcome {
+    pub instance: instances::Instance,
+    /// Файлы, которые автор разрешил качать только с сайта CurseForge
+    pub manual: Vec<crate::curseforge::ManualFile>,
+}
+
+/// Импорт любого архива сборки: Modrinth (.mrpack), CurseForge (.zip) или Prism / MultiMC (.zip)
+#[tauri::command]
+pub async fn import_pack(app: AppHandle, path: Option<String>) -> Result<Option<ImportOutcome>, String> {
+    let file = match path {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let dialog_app = app.clone();
+            let picked = tauri::async_runtime::spawn_blocking(move || {
+                dialog_app.dialog().file().add_filter("Сборка (.mrpack, .zip)", &["mrpack", "zip"]).blocking_pick_file()
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            match picked {
+                Some(p) => p.into_path().map_err(|e| e.to_string())?,
+                None => return Ok(None),
+            }
+        }
+    };
+    let kind = {
+        let f = std::fs::File::open(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let mut zip = zip::ZipArchive::new(f).map_err(|_| "NOT_A_PACK".to_string())?;
+        if zip.by_name("modrinth.index.json").is_ok() {
+            "mrpack"
+        } else if crate::curseforge::is_curseforge(&mut zip) {
+            "curseforge"
+        } else {
+            "prism"
+        }
+    };
+    match kind {
+        "mrpack" => Ok(Some(ImportOutcome { instance: import_file(&app, &file, None).await?, manual: vec![] })),
+        "curseforge" => {
+            let (instance, manual) = crate::curseforge::import(&app, &file).await?;
+            Ok(Some(ImportOutcome { instance, manual }))
+        }
+        _ => {
+            let unpack_app = app.clone();
+            let f2 = file.clone();
+            let dir = tauri::async_runtime::spawn_blocking(move || crate::prism::unpack_prism_zip(&unpack_app, &f2))
+                .await
+                .map_err(|e| e.to_string())??
+                .ok_or("NOT_A_PACK")?;
+            let res = crate::prism::import_dir(&app, &dir, (instances::now_secs() % 6) as u8);
+            let _ = std::fs::remove_dir_all(&dir);
+            Ok(Some(ImportOutcome { instance: res?, manual: vec![] }))
+        }
+    }
+}
+
 /// Готовая сборка из каталога Modrinth: скачиваем её .mrpack и импортируем.
 #[tauri::command]
 pub async fn install_modpack(app: AppHandle, project_id: String) -> Result<instances::Instance, String> {

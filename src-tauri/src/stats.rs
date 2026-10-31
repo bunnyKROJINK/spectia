@@ -47,3 +47,11 @@ pub fn stats_summary(app: AppHandle) -> Result<Summary, String> {
     }
     Ok(out)
 }
+
+/// Все игровые сессии (для графиков). Хранятся только у вас на компьютере.
+#[tauri::command]
+pub fn stats_sessions(app: AppHandle) -> Result<Vec<Session>, String> {
+    let dir = paths::data_dir(&app)?;
+    let text = std::fs::read_to_string(dir.join("stats.jsonl")).unwrap_or_default();
+    Ok(text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+}

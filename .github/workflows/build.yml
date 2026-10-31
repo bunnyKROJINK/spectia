@@ -66,6 +66,9 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
       # Client ID приложения Microsoft для входа с лицензией (Settings → Secrets and variables → Actions → Variables)
       SPECTIA_MS_CLIENT_ID: ${{ vars.SPECTIA_MS_CLIENT_ID }}
+      # Ключ CurseForge (секрет) и Application ID приложения Discord (не секрет)
+      SPECTIA_CF_KEY: ${{ secrets.SPECTIA_CF_KEY }}
+      SPECTIA_DISCORD_ID: ${{ vars.SPECTIA_DISCORD_ID }}
     steps:
       - uses: actions/checkout@v4
 

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use crate::{microsoft, net, paths};
+use crate::{microsoft, net, paths, prism};
 
 const ELY_AUTH: &str = "https://authserver.ely.by/auth";
 
@@ -205,6 +205,39 @@ pub async fn fresh_microsoft(app: &AppHandle, id: &str) -> Result<Account, Strin
     Ok(store.accounts[idx].clone())
 }
 
+/// Добавить лицензионный аккаунт, в который уже вошли в Prism Launcher
+#[tauri::command]
+pub fn add_prism_account(app: AppHandle, id: String) -> Result<Vec<AccountInfo>, String> {
+    let acc = prism::find_prism_accounts(app.clone()).into_iter().find(|a| a.id == id).ok_or("PRISM_GONE")?;
+    let mut store = load(&app)?;
+    store.accounts.retain(|a| a.id != acc.id);
+    store.accounts.push(Account {
+        id: acc.id.clone(),
+        name: acc.name,
+        kind: "prism".into(),
+        access_token: String::new(),
+        refresh_token: String::new(),
+        expires_at: 0,
+    });
+    store.active = acc.id;
+    save(&app, &store)?;
+    Ok(info(&store))
+}
+
+/// Аккаунт с лицензией и свежим игровым ключом (Microsoft или через Prism)
+pub async fn licensed(app: &AppHandle, id: &str) -> Result<Account, String> {
+    let store = load(app)?;
+    let acc = store.accounts.iter().find(|a| a.id == id).ok_or("NO_ACCOUNT")?.clone();
+    match acc.kind.as_str() {
+        "microsoft" => fresh_microsoft(app, id).await,
+        "prism" => {
+            let (name, token) = prism::prism_token(app, id)?;
+            Ok(Account { name, access_token: token, ..acc })
+        }
+        _ => Err("NO_ACCOUNT".into()),
+    }
+}
+
 #[tauri::command]
 pub fn set_active_account(app: AppHandle, id: String) -> Result<Vec<AccountInfo>, String> {
     let mut store = load(&app)?;
@@ -259,6 +292,14 @@ pub async fn active_for_launch(app: &AppHandle) -> Result<Account, String> {
             Err(e) if e.starts_with("NETWORK") => {}
             Err(_) => return Err("ELY_RELOGIN".into()),
         }
+    }
+    if acc.kind == "prism" {
+        let (name, token) = prism::prism_token(app, &acc.id)?;
+        if name != acc.name && !name.is_empty() {
+            store.accounts[idx].name = name.clone();
+            save(app, &store)?;
+        }
+        return Ok(Account { name, access_token: token, ..acc });
     }
     if acc.kind == "microsoft" {
         return match fresh_microsoft(app, &acc.id).await {

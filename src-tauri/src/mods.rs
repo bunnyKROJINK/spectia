@@ -9,7 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
-use crate::instances;
+use crate::{history, instances, modrinth};
 
 #[derive(Debug, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +21,10 @@ pub struct ModInfo {
     pub authors: String,
     pub enabled: bool,
     pub size: u64,
+    /// Когда файл появился в папке (секунды с 1970 года)
+    pub added: u64,
+    /// Проект на Modrinth, если мод ставили оттуда
+    pub project_id: String,
 }
 
 fn mods_dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
@@ -40,6 +44,9 @@ fn safe_file(dir: &Path, file: &str) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn list_mods(app: AppHandle, id: String) -> Result<Vec<ModInfo>, String> {
     let dir = mods_dir(&app, &id)?;
+    let inst_dir = instances::dir(&app, &id)?;
+    history::detect_external(&inst_dir);
+    let index = modrinth::read_index(&inst_dir);
     let mut list = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
         let file = entry.file_name().to_string_lossy().into_owned();
@@ -51,7 +58,14 @@ pub fn list_mods(app: AppHandle, id: String) -> Result<Vec<ModInfo>, String> {
         let mut info = read_metadata(&entry.path());
         info.file = file.clone();
         info.enabled = enabled;
-        info.size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        let meta = entry.metadata().ok();
+        info.size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        info.added = meta
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        info.project_id = index.get(&format!("mods/{}", file.trim_end_matches(".disabled"))).map(|e| e.project_id.clone()).unwrap_or_default();
         if info.name.is_empty() {
             info.name = file.trim_end_matches(".disabled").trim_end_matches(".jar").to_string();
         }
@@ -70,13 +84,20 @@ pub fn toggle_mod(app: AppHandle, id: String, file: String) -> Result<String, St
         None => format!("{file}.disabled"),
     };
     std::fs::rename(&from, dir.join(&to_name)).map_err(|e| format!("не получилось переключить мод: {e}"))?;
+    let name = read_metadata(&dir.join(&to_name)).name;
+    let name = if name.is_empty() { history::pretty(&file) } else { name };
+    history::log(&instances::dir(&app, &id)?, if file.ends_with(".disabled") { "enabled" } else { "disabled" }, &name, &to_name);
     Ok(to_name)
 }
 
 #[tauri::command]
 pub fn delete_mod(app: AppHandle, id: String, file: String) -> Result<(), String> {
     let dir = mods_dir(&app, &id)?;
-    std::fs::remove_file(safe_file(&dir, &file)?).map_err(|e| format!("не получилось удалить мод: {e}"))
+    let path = safe_file(&dir, &file)?;
+    let name = read_metadata(&path).name;
+    std::fs::remove_file(&path).map_err(|e| format!("не получилось удалить мод: {e}"))?;
+    history::log(&instances::dir(&app, &id)?, "removed", if name.is_empty() { &file } else { &name }, &file);
+    Ok(())
 }
 
 /// Копирует перетащенные в окно .jar-файлы в папку модов. Возвращает, сколько добавлено.
@@ -91,6 +112,8 @@ pub fn add_mods(app: AppHandle, id: String, paths: Vec<String>) -> Result<usize,
             continue;
         }
         std::fs::copy(&src, dir.join(&name)).map_err(|e| format!("{name}: {e}"))?;
+        let title = read_metadata(&dir.join(&name)).name;
+        history::log(&instances::dir(&app, &id)?, "added", if title.is_empty() { &name } else { &title }, &name);
         added += 1;
     }
     Ok(added)

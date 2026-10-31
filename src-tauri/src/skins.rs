@@ -81,8 +81,8 @@ struct McCape {
 pub async fn account_skin(app: AppHandle, id: String) -> Result<AccountSkin, String> {
     let store = accounts::load(&app)?;
     let acc = store.accounts.iter().find(|a| a.id == id).ok_or("NO_ACCOUNT")?.clone();
-    if acc.kind == "microsoft" {
-        let acc = accounts::fresh_microsoft(&app, &acc.id).await?;
+    if acc.kind == "microsoft" || acc.kind == "prism" {
+        let acc = accounts::licensed(&app, &acc.id).await?;
         let profile: McProfile = net::client()
             .get(PROFILE)
             .bearer_auth(&acc.access_token)
@@ -235,7 +235,7 @@ pub async fn apply_skin(app: AppHandle, account: String, file: String) -> Result
     let dir = library_dir(&app)?;
     let skin = read_library(&dir).into_iter().find(|s| s.file == file).ok_or("скин не найден")?;
     let bytes = std::fs::read(dir.join(plain(&skin.file)?)).map_err(|e| e.to_string())?;
-    let acc = accounts::fresh_microsoft(&app, &account).await.map_err(|e| if e == "NO_ACCOUNT" { "ELY_SITE".to_string() } else { e })?;
+    let acc = accounts::licensed(&app, &account).await.map_err(|e| if e == "NO_ACCOUNT" { "ELY_SITE".to_string() } else { e })?;
     let part = reqwest::multipart::Part::bytes(bytes).file_name("skin.png").mime_str("image/png").map_err(|e| e.to_string())?;
     let form = reqwest::multipart::Form::new().text("variant", if skin.slim { "slim" } else { "classic" }).part("file", part);
     net::client()
@@ -253,7 +253,7 @@ pub async fn apply_skin(app: AppHandle, account: String, file: String) -> Result
 /// Выбрать плащ (или снять его, если cape = None)
 #[tauri::command]
 pub async fn set_cape(app: AppHandle, account: String, cape: Option<String>) -> Result<(), String> {
-    let acc = accounts::fresh_microsoft(&app, &account).await?;
+    let acc = accounts::licensed(&app, &account).await?;
     let url = format!("{PROFILE}/capes/active");
     let req = match cape {
         Some(id) => net::client().put(&url).json(&serde_json::json!({ "capeId": id })),
