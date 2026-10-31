@@ -27,10 +27,15 @@
 - [x] Список модов: включить, выключить, удалить, перетащить в окно
 - [x] Редактирование и дублирование сборок, время в игре
 - [ ] Вход через Microsoft
-- [ ] Установка модов в один клик
+- [x] Установка модов, текстурпаков, шейдеров и сборок с Modrinth в один клик (с зависимостями)
+- [x] Обновление модов по кнопке
+- [x] Экспорт и импорт сборок в .mrpack
+- [x] Миры, скриншоты, своя обложка сборки
+- [x] Тематические темы: Космос, Океан, Хэллоуин
 - [ ] CurseForge (ждём ключ API) и понятное окно для модов, которые можно скачать только с сайта
-- [ ] Импорт и экспорт сборок (.mrpack, CurseForge, Prism / MultiMC)
+- [ ] Импорт сборок CurseForge и Prism / MultiMC
 - [ ] Скины
+- [ ] Миры: датапаки в один клик
 
 ## Как скачать
 
@@ -55,6 +60,9 @@ src-tauri/           Rust-часть
   src/launch.rs      запуск игры
   src/loaders.rs     Fabric, Quilt, Forge, NeoForge
   src/mods.rs        список модов сборки
+  src/modrinth.rs    установка с Modrinth и обновления
+  src/mrpack.rs      экспорт и импорт .mrpack
+  src/content.rs     миры, скриншоты, обложки
   src/updater.rs     автообновление
 ```
 
@@ -88,7 +96,7 @@ Spectia не является официальным продуктом Minecraf
 
 ## English
 
-Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. It features six themes, Russian and English UI, instance management with per-instance settings, Modrinth search, Ely.by sign-in, game launching with automatic Java download (vanilla, Fabric, Quilt, Forge, NeoForge), a per-instance mod manager, and self-updates. Microsoft sign-in, one-click mod installs and CurseForge support are in progress.
+Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. It features six themes, Russian and English UI, instance management with per-instance settings, Modrinth search, Ely.by sign-in, game launching with automatic Java download (vanilla, Fabric, Quilt, Forge, NeoForge), a per-instance mod manager with one-click Modrinth installs and update checks, .mrpack export/import, worlds and screenshots, themed themes, and self-updates. Microsoft sign-in, one-click mod installs and CurseForge support are in progress.
 
 Build: install Rust and Node.js, then run `npm install` and `npm run build`.
 

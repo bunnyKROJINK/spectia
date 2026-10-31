@@ -320,6 +320,24 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 24px; cu
 @keyframes star { 0%, 100% { opacity: 0; } 50% { opacity: .8; } }
 @keyframes appIn { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
 
+/* ---------- Украшения тематических тем ---------- */
+#deco { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.titlebar, .body { position: relative; z-index: 1; }
+.deco-item { position: absolute; display: block; animation: decoFloat 7s ease-in-out infinite; transform: var(--flip); }
+.deco-item svg { display: block; width: 100%; height: auto; }
+.deco-item.sway { animation-name: decoSway; transform-origin: bottom center; }
+@keyframes decoFloat { 0%, 100% { translate: 0 0; rotate: -4deg; } 50% { translate: 6px -14px; rotate: 4deg; } }
+@keyframes decoSway { 0%, 100% { rotate: -6deg; } 50% { rotate: 6deg; } }
+
+/* ---------- Скриншоты ---------- */
+.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.shot { margin: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
+.shot-img { padding: 0; border: 0; border-radius: 8px; overflow: hidden; cursor: zoom-in; background: var(--surface2); aspect-ratio: 16 / 9; }
+.shot-img img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .25s ease; }
+.shot-img:hover img { transform: scale(1.03); }
+.shot figcaption { gap: 6px; flex-wrap: nowrap; }
+.tabs { flex-wrap: wrap; }
+
 @keyframes viewIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
 @keyframes spin { to { transform: rotate(360deg); } }

@@ -48,9 +48,29 @@ export const THEMES = {
     accent: '#E4E6EE', accentInk: '#000000', accentSoft: 'rgba(255,255,255,0.1)', accentText: '#F2F3F7',
     glow: 'rgba(255,255,255,0.12)', avatar: 'linear-gradient(135deg,#3A3A44,#1C1C22)',
     surface: 'rgba(255,255,255,0.03)', muted: '#A4A6B2', navText: '#BDBFCA' },
+  amethyst: { ...DARK,
+    bg: '#120B1E', dialog: '#1F1430', g1: 'rgba(160,100,255,0.28)', g2: 'rgba(110,60,200,0.22)',
+    accent: '#B78CFF', accentInk: '#140A22', accentSoft: 'rgba(183,140,255,0.18)', accentText: '#DCC8FF',
+    glow: 'rgba(183,140,255,0.35)', avatar: 'linear-gradient(135deg,#8A5CF0,#5B3DB8)',
+    navText: '#D3C6EA', muted: '#B3A6CC' },
+  space: { ...DARK, deco: 'space',
+    bg: '#070A1C', dialog: '#11163A', g1: 'rgba(90,110,255,0.26)', g2: 'rgba(180,90,255,0.18)',
+    accent: '#7FA8FF', accentInk: '#060A1C', accentSoft: 'rgba(127,168,255,0.18)', accentText: '#C6D6FF',
+    glow: 'rgba(127,168,255,0.35)', avatar: 'linear-gradient(135deg,#4A5BD9,#8A4FD1)',
+    navText: '#C3C9E8', muted: '#A4ABD0' },
+  ocean: { ...DARK, deco: 'ocean',
+    bg: '#04141C', dialog: '#0B2430', g1: 'rgba(40,180,210,0.26)', g2: 'rgba(30,110,200,0.22)',
+    accent: '#4FD8E8', accentInk: '#031318', accentSoft: 'rgba(79,216,232,0.16)', accentText: '#B4F0F7',
+    glow: 'rgba(79,216,232,0.32)', avatar: 'linear-gradient(135deg,#1F8FB0,#1C5E9E)',
+    navText: '#BFDDE4', muted: '#9DC0C9' },
+  halloween: { ...DARK, deco: 'halloween',
+    bg: '#140B06', dialog: '#24140B', g1: 'rgba(255,130,40,0.26)', g2: 'rgba(140,60,200,0.16)',
+    accent: '#FF9A3C', accentInk: '#1A0C03', accentSoft: 'rgba(255,154,60,0.16)', accentText: '#FFD0A3',
+    glow: 'rgba(255,154,60,0.34)', avatar: 'linear-gradient(135deg,#E06A12,#7A3DB0)',
+    navText: '#E5CDB8', muted: '#C9AE98' },
 };
 
-export const THEME_ORDER = ['night', 'emerald', 'sakura', 'ruby', 'light', 'midnight'];
+export const THEME_ORDER = ['night', 'emerald', 'sakura', 'ruby', 'amethyst', 'space', 'ocean', 'halloween', 'light', 'midnight'];
 
 /** Переводит camelCase в kebab-case: accentInk → accent-ink */
 const kebab = (s) => s.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
@@ -60,7 +80,7 @@ export function applyTheme(id) {
   const theme = THEMES[id] || THEMES.sakura;
   const root = document.documentElement;
   for (const [key, value] of Object.entries(theme)) {
-    if (key !== 'scheme') root.style.setProperty('--' + kebab(key), value);
+    if (key !== 'scheme' && key !== 'deco') root.style.setProperty('--' + kebab(key), value);
   }
   root.style.colorScheme = theme.scheme;
 }

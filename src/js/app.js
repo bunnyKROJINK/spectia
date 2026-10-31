@@ -6,13 +6,14 @@
 //  • Кнопки помечены data-action="…", а их обработчики лежат в объекте `actions`.
 //  • Поля ввода помечены data-bind="путь.в.state" и сами записывают туда значение.
 
-import { api, win, openUrl, inApp, on, onFileDrop } from './api.js';
+import { api, win, openUrl, inApp, on, onFileDrop, fileUrl } from './api.js';
+import { renderDecorations } from './decorations.js';
 import { t, setLang, LANGS, formatNumber } from './i18n.js';
 import { THEMES, THEME_ORDER, TINTS, applyTheme } from './themes.js';
 import { icon, heroArt } from './icons.js';
 import { searchModrinth } from './modrinth.js';
 
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.4.0';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
@@ -42,7 +43,11 @@ const state = {
   loaderVersions: {},      // "fabric:26.3" → список версий загрузчика
   mods: { id: null, list: null, loading: false, query: '', dragging: false },
   ctx: null,               // меню по правой кнопке: { id, x, y }
-  res: { query: '', kind: 'mod', source: 'modrinth', results: null, loading: false, error: false, targetId: null },
+  worlds: { id: null, list: null },
+  shots: { id: null, list: null },
+  dataDir: '',             // папка с данными лаунчера (для картинок обложек)
+  importing: null,         // { done, total } пока импортируется .mrpack
+  res: { query: '', kind: 'mod', source: 'modrinth', results: null, loading: false, error: false, targetId: null, installing: {}, installed: new Set(), installedFor: null },
   skins: { model: 'classic', selected: 0 },
   accounts: [],
   ely: { username: '', password: '', totp: '', need2fa: false, busy: false, error: '' },
@@ -65,6 +70,21 @@ const selected = () => state.instances.find((i) => i.id === state.selectedId) ||
 const activeAccount = () => state.accounts.find((a) => a.active) || null;
 const loaderLabel = (id) => (id === 'vanilla' ? t('loader.none') : t('loader.' + id));
 const tint = (n) => TINTS[n] || TINTS[0];
+
+/** Путь к своей картинке-обложке сборки (если есть) */
+function coverUrl(inst) {
+  if (!inst?.coverImage || !state.dataDir) return '';
+  const sep = state.dataDir.includes('\\') ? '\\' : '/';
+  return fileUrl([state.dataDir, 'instances', inst.id, inst.coverImage].join(sep));
+}
+
+/** Фон обложки: картинка, если выбрана, иначе цветной градиент */
+function coverBg(inst, shade = false) {
+  const url = coverUrl(inst);
+  if (!url) return `background:${tint(inst?.tint)}`;
+  const dark = shade ? 'linear-gradient(0deg, rgba(8,8,22,.35), rgba(8,8,22,.05)), ' : '';
+  return `background:${dark}url("${url}") center/cover no-repeat, ${tint(inst.tint)}`;
+}
 const pressed = (on) => `aria-pressed="${on ? 'true' : 'false'}"`;
 
 function getPath(path) {
@@ -98,6 +118,7 @@ async function saveSettings() {
 function applySettings() {
   setLang(state.settings.language);
   applyTheme(state.settings.theme);
+  renderDecorations(THEMES[state.settings.theme]?.deco, state.settings.showDecorations !== false);
   document.documentElement.classList.toggle('reduce-motion', !!state.settings.reduceMotion);
 }
 
@@ -185,7 +206,7 @@ function viewHome() {
     </div>`;
   }
   return `<div class="view">
-    <section class="hero" aria-label="${esc(cur.name)}" style="background:${tint(cur.tint)}">${heroArt}
+    <section class="hero" aria-label="${esc(cur.name)}" style="${coverBg(cur, true)}">${coverUrl(cur) ? '' : heroArt}
       <div class="hero-inner">
         <div class="stack" style="gap:10px;min-width:0">
           <span class="eyebrow">${esc(t('home.continue'))}</span>
@@ -217,7 +238,7 @@ function viewHome() {
       <div class="grid grid-cards">
         ${state.instances.slice(0, 8).map((i) => `
           <button class="card" data-action="select" data-id="${esc(i.id)}" data-ctx="${esc(i.id)}" ${pressed(i.id === cur.id)}>
-            <span class="cover" style="background:${tint(i.tint)}"></span>
+            <span class="cover" style="${coverBg(i)}"></span>
             <span class="card-title ellipsis" style="max-width:100%">${esc(i.name)}</span>
             <span class="small muted">${esc(i.gameVersion)} · ${esc(loaderLabel(i.loader))}</span>
           </button>`).join('')}
@@ -240,7 +261,7 @@ function findBlock() {
 function viewInstances() {
   const rows = state.instances.map((i) => `
     <div class="list-row" data-ctx="${esc(i.id)}">
-      <span class="thumb" style="background:${tint(i.tint)}"></span>
+      <span class="thumb" style="${coverBg(i)}"></span>
       <div class="stack grow" style="gap:3px">
         <span class="card-title ellipsis">${esc(i.name)}</span>
         <span class="small muted">Minecraft ${esc(i.gameVersion)} · ${esc(loaderLabel(i.loader))} · ${esc(formatPlayTime(i.playTimeSecs))}</span>
@@ -258,8 +279,7 @@ function viewInstances() {
     <div class="row between">
       <h1 class="page-title">${esc(t('inst.title'))}</h1>
       <div class="row" style="gap:8px">
-        <button class="btn" data-action="soon">${esc(t('inst.import'))}</button>
-        <button class="btn" data-action="soon">${esc(t('inst.export'))}</button>
+        <button class="btn" data-action="importPack">${icon.upload(16)}<span>${esc(t('inst.import'))}</span></button>
         <button class="btn accent" data-action="openCreate">${esc(t('home.newInstance'))}</button>
       </div>
     </div>
@@ -382,7 +402,7 @@ function viewCreate() {
       <section class="panel dashed empty" style="min-height:220px">${icon.upload()}
         <h2 class="h2">${esc(t('create.dropTitle'))}</h2>
         <p class="note">${esc(t('create.dropSub'))}</p>
-        <button class="btn" data-action="soon">${esc(t('common.chooseFile'))}</button>
+        <button class="btn" data-action="importPack">${esc(t('common.chooseFile'))}</button>
       </section>
       <section class="panel empty" style="min-height:220px">${icon.search()}
         <h2 class="h2">${esc(t('create.catalogTitle'))}</h2>
@@ -409,18 +429,20 @@ function viewInstance() {
   const e = state.edit;
   if (!e) return viewInstances();
   const tab = state.instTab;
-  const tabs = ['general', 'mods', 'launch'].map((k) =>
+  const tabs = ['general', 'mods', 'worlds', 'screens', 'launch'].map((k) =>
     `<button role="tab" aria-selected="${tab === k}" data-action="setInstTab" data-tab="${k}">${esc(t('is.tab.' + k))}</button>`).join('');
 
   let body = '';
   if (tab === 'general') body = instGeneral(e);
   if (tab === 'mods') body = instMods(e);
   if (tab === 'launch') body = instLaunch(e);
+  if (tab === 'worlds') body = instWorlds(e);
+  if (tab === 'screens') body = instShots(e);
 
   return `<div class="view">
     <div class="row" style="gap:14px">
       <button class="icon-btn" data-action="goBack" aria-label="${esc(t('common.back'))}">${icon.back()}</button>
-      <span class="thumb" style="width:44px;height:44px;background:${tint(e.tint)}"></span>
+      <span class="thumb" style="width:44px;height:44px;${coverBg(e)}"></span>
       <div class="stack grow" style="gap:2px;min-width:0">
         <span class="small muted">${esc(t('is.title'))}</span>
         <h1 class="ellipsis" style="font-size:24px;font-weight:700">${esc(e.name || '…')}</h1>
@@ -429,7 +451,7 @@ function viewInstance() {
     </div>
     <div class="tabs" role="tablist">${tabs}</div>
     ${body}
-    ${tab !== 'mods' ? `<div class="row" style="justify-content:flex-end">
+    ${tab === 'general' || tab === 'launch' ? `<div class="row" style="justify-content:flex-end">
       <button class="btn" data-action="resetEdit">${esc(t('common.reset'))}</button>
       <button class="btn accent" data-action="saveInstance">${esc(t('common.save'))}</button>
     </div>` : ''}
@@ -440,7 +462,7 @@ function instGeneral(e) {
   const last = e.lastPlayed ? new Date(e.lastPlayed * 1000).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long', year: 'numeric' }) : t('is.never');
   return `
     <section class="panel pad row" style="gap:18px;align-items:flex-end">
-      <span class="thumb" style="width:72px;height:72px;border-radius:14px;background:${tint(e.tint)}"></span>
+      <span class="thumb" style="width:72px;height:72px;border-radius:14px;${coverBg(e)}"></span>
       <div class="field" style="flex:1 1 240px">
         <label for="ename" class="label">${esc(t('create.name'))}</label>
         <input id="ename" class="input" type="text" maxlength="60" value="${esc(e.name)}" data-bind="edit.name">
@@ -448,6 +470,10 @@ function instGeneral(e) {
       <div class="field">
         <span class="label">${esc(t('create.cover'))}</span>
         <div class="row" style="gap:6px" role="group" aria-label="${esc(t('create.cover'))}">${tintButtons(e.tint, 'setEditTint')}</div>
+        <div class="row" style="gap:6px">
+          <button class="btn sm" data-action="pickCover" data-id="${esc(e.id)}">${icon.upload(16)}<span>${esc(t('cover.custom'))}</span></button>
+          ${e.coverImage ? `<button class="btn sm" data-action="clearCover" data-id="${esc(e.id)}">${esc(t('cover.remove'))}</button>` : ''}
+        </div>
       </div>
     </section>
 
@@ -469,6 +495,11 @@ function instGeneral(e) {
       <h2 class="h2">${esc(t('create.loader'))}</h2>
       ${loaderCards(e.loader, 'setEditLoader')}
       ${loaderVersionSelect(e.loader, e.gameVersion, 'edit.loaderVersion', e.loaderVersion)}
+    </section>
+
+    <section class="panel pad row between" style="gap:14px">
+      <p class="note" style="flex:1 1 320px">${esc(t('is.shareNote'))}</p>
+      <button class="btn soft" data-action="share" data-id="${esc(e.id)}">${icon.upload(16)}<span>${esc(t('is.share'))}</span></button>
     </section>
 
     <div class="row">
@@ -497,6 +528,7 @@ function instMods(e) {
         <span class="small muted">${esc(t('mods.count', { on, all: m.list.length }))}</span>
       </div>
       <div class="row" style="gap:8px">
+        <button class="btn sm" data-action="checkUpdates" data-id="${esc(e.id)}" ${m.checking ? 'disabled' : ''}>${m.checking ? `<span class="spinner"></span>${esc(t('mods.checking'))}` : esc(t('mods.checkUpdates'))}</button>
         <button class="btn sm" data-action="openModsFolder" data-id="${esc(e.id)}">${icon.folder(16)}<span>${esc(t('mods.openFolder'))}</span></button>
         <button class="btn sm soft" data-action="findMods" data-id="${esc(e.id)}">${esc(t('mods.find'))}</button>
       </div>
@@ -517,6 +549,67 @@ function instMods(e) {
       <button class="icon-btn" data-action="deleteMod" data-file="${esc(x.file)}" aria-label="${esc(t('mods.delete', { name: x.name }))}" title="${esc(t('mods.delete', { name: x.name }))}">${icon.trash()}</button>
     </div>`).join('')}
   </section>`;
+}
+
+function instWorlds(e) {
+  const w = state.worlds;
+  if (w.id !== e.id || w.list === null) {
+    loadWorlds(e.id);
+    return `<div class="row" style="padding:20px"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
+  }
+  if (!w.list.length) {
+    return `<section class="panel empty">${icon.box()}<h2 class="h2">${esc(t('worlds.empty'))}</h2><p class="note">${esc(t('worlds.emptySub'))}</p></section>`;
+  }
+  const date = (secs) => new Date(secs * 1000).toLocaleString(document.documentElement.lang, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  return `<section class="panel list">${w.list.map((x) => `
+    <div class="list-row">
+      ${x.icon && inApp ? `<img class="thumb" src="${esc(fileUrl(x.icon))}" alt="" style="image-rendering:pixelated">` : `<span class="thumb mod-icon" aria-hidden="true">${esc(x.folder.charAt(0).toUpperCase())}</span>`}
+      <div class="stack grow" style="gap:2px">
+        <span class="card-title" style="font-size:15px">${esc(x.folder)}</span>
+        <span class="small muted">${esc(t('worlds.played', { date: date(x.lastPlayed) }))} · ${esc(t('unit.mb', { n: (x.size / 1048576).toFixed(1) }))}</span>
+      </div>
+      <button class="btn sm" data-action="copyWorld" data-folder="${esc(x.folder)}">${icon.copy()}<span>${esc(t('worlds.copy'))}</span></button>
+      <button class="icon-btn" data-action="openWorld" data-folder="${esc(x.folder)}" aria-label="${esc(t('worlds.open'))}" title="${esc(t('worlds.open'))}">${icon.folder()}</button>
+      <button class="icon-btn" data-action="askDeleteWorld" data-folder="${esc(x.folder)}" aria-label="${esc(t('worlds.delete'))}" title="${esc(t('worlds.delete'))}">${icon.trash()}</button>
+    </div>`).join('')}</section>`;
+}
+
+function instShots(e) {
+  const sh = state.shots;
+  if (sh.id !== e.id || sh.list === null) {
+    loadShots(e.id);
+    return `<div class="row" style="padding:20px"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
+  }
+  if (!sh.list.length) {
+    return `<section class="panel empty">${icon.box()}<h2 class="h2">${esc(t('shots.empty'))}</h2><p class="note">${esc(t('shots.emptySub'))}</p></section>`;
+  }
+  return `<div class="shots">${sh.list.map((x) => `
+    <figure class="shot">
+      <button class="shot-img" data-action="openShot" data-file="${esc(x.file)}" aria-label="${esc(x.file)}"><img src="${esc(fileUrl(x.path))}" alt="" loading="lazy"></button>
+      <figcaption class="row between">
+        <span class="small muted ellipsis">${esc(new Date(x.time * 1000).toLocaleString(document.documentElement.lang, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}</span>
+        <span class="row" style="gap:4px">
+          <button class="btn sm" data-action="shotCover" data-file="${esc(x.file)}">${esc(t('shots.cover'))}</button>
+          <button class="icon-btn" style="width:34px;height:34px" data-action="deleteShot" data-file="${esc(x.file)}" aria-label="${esc(t('shots.delete'))}">${icon.trash()}</button>
+        </span>
+      </figcaption>
+    </figure>`).join('')}</div>`;
+}
+
+async function loadWorlds(id) {
+  if (state.worlds.loading) return;
+  state.worlds = { id, list: null, loading: true };
+  try { state.worlds.list = await api.listWorlds(id); } catch (e) { state.worlds.list = []; toast(t('error.generic', { message: e }), true); }
+  state.worlds.loading = false;
+  if (state.view === 'instance') render();
+}
+
+async function loadShots(id) {
+  if (state.shots.loading) return;
+  state.shots = { id, list: null, loading: true };
+  try { state.shots.list = await api.listScreenshots(id); } catch (e) { state.shots.list = []; toast(t('error.generic', { message: e }), true); }
+  state.shots.loading = false;
+  if (state.view === 'instance') render();
 }
 
 function instLaunch(e) {
@@ -594,9 +687,24 @@ async function loadMods(id) {
   if (state.view === 'instance') render();
 }
 
+function installButton(m) {
+  const r = state.res;
+  if (r.installing[m.id]) return `<button class="btn sm soft" disabled><span class="spinner"></span>${esc(t('res.installing'))}</button>`;
+  if (r.kind !== 'modpack' && r.installed.has(m.id)) return `<button class="btn sm" disabled>${esc(t('res.installed'))}</button>`;
+  return `<button class="btn sm soft" data-action="install" data-pid="${esc(m.id)}" data-title="${esc(m.title)}">${esc(t('res.install'))}</button>`;
+}
+
+async function loadInstalled(id) {
+  if (!id) return;
+  state.res.installedFor = id;
+  try { state.res.installed = new Set(await api.installedProjects(id)); } catch { state.res.installed = new Set(); }
+  if (state.view === 'resources') render();
+}
+
 function viewResources() {
   const r = state.res;
   const target = state.instances.find((i) => i.id === r.targetId) || selected();
+  if (target && r.installedFor !== target.id) loadInstalled(target.id);
   let results = '';
   if (r.source === 'curseforge') {
     results = `<section class="panel empty">${icon.warn(32)}
@@ -623,7 +731,7 @@ function viewResources() {
           <p class="note" style="line-height:1.45">${esc(m.description)}</p>
           <a href="#" class="small" data-action="openUrl" data-url="${esc(m.url)}">modrinth.com</a>
         </div>
-        <button class="btn sm soft" data-action="soon">${esc(t('res.install'))}</button>
+        ${installButton(m)}
       </article>`).join('')}
     </div>`;
   }
@@ -772,6 +880,7 @@ function viewSettings() {
         <span class="note">${esc(t('set.themeNow', { name: t('theme.' + s.theme) }))}</span>
       </div>
       <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr))" role="group" aria-label="${esc(t('set.theme'))}">${themeCards}</div>
+      ${THEMES[s.theme]?.deco ? switchRow('toggleSetting', 'showDecorations', s.showDecorations !== false, t('set.decorations'), t('set.decorationsSub')) : ''}
       ${switchRow('toggleSetting', 'reduceMotion', s.reduceMotion, t('set.reduceMotion'), t('set.reduceMotionSub'))}
     </section>
 
@@ -910,13 +1019,32 @@ function updateDialog() {
   </div></div>`;
 }
 
+function updatesDialog() {
+  const d = state.dialog;
+  return `<div class="overlay" ${d.busy ? '' : 'data-action="closeDialog"'}><div class="dialog" style="max-width:600px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+    <h2 id="dlg-title">${esc(t('mods.updTitle', { n: d.list.length }))}</h2>
+    <p class="note">${esc(t('mods.updText'))}</p>
+    <div class="list" style="padding:0;max-height:300px;overflow:auto">
+      ${d.list.map((u, n) => `<label class="list-row" style="cursor:pointer;padding:10px 4px">
+        <input type="checkbox" data-upd="${n}" ${d.picked.has(n) ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--accent)">
+        <span class="grow"><b>${esc(u.name)}</b> <span class="muted small">${esc(u.current)} → ${esc(u.latest)}</span></span>
+      </label>`).join('')}
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn" data-action="closeDialog" ${d.busy ? 'disabled' : ''}>${esc(t('common.cancel'))}</button>
+      <button class="btn" data-action="duplicate" data-id="${esc(state.edit?.id || '')}" ${d.busy ? 'disabled' : ''}>${icon.copy()}<span>${esc(t('is.duplicate'))}</span></button>
+      <button class="btn accent" data-action="applyUpdates" ${d.busy || !d.picked.size ? 'disabled' : ''}>${d.busy ? `<span class="spinner"></span>${esc(t('mods.updating'))}` : esc(t('mods.updApply'))}</button>
+    </div>
+  </div></div>`;
+}
+
 function contextMenu() {
   const { id, x, y } = state.ctx;
   const item = (action, ic, label, extra = '') =>
     `<button role="menuitem" data-action="${action}" data-id="${esc(id)}" ${extra}>${ic}<span>${esc(t(label))}</span></button>`;
   // Не даём меню вылезти за край окна
   const left = Math.min(x, window.innerWidth - 230);
-  const top = Math.min(y, window.innerHeight - 330);
+  const top = Math.min(y, window.innerHeight - 370);
   return `<div class="ctx-backdrop" data-action="closeCtx"></div>
     <div class="ctx" role="menu" aria-label="${esc(t('ctx.label'))}" style="left:${left}px;top:${top}px">
       ${item('ctxPlay', icon.play(14), 'ctx.play')}
@@ -926,6 +1054,7 @@ function contextMenu() {
       ${item('ctxRename', icon.edit(), 'ctx.rename')}
       ${item('ctxCover', icon.palette(), 'ctx.cover')}
       ${item('ctxDuplicate', icon.copy(), 'ctx.duplicate')}
+      ${item('ctxShare', icon.upload(16), 'ctx.share')}
       <div class="ctx-sep" role="separator"></div>
       ${item('ctxDelete', icon.trash(), 'ctx.delete', 'class="danger"')}
     </div>`;
@@ -991,8 +1120,12 @@ function renderOverlay() {
     html += `<div class="overlay" data-action="closeDialog"><div class="dialog" style="max-width:440px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
       <h2 id="dlg-title">${esc(t('cover.title'))}</h2>
       <div class="row" style="gap:12px;align-items:center">
-        <span class="thumb" style="width:64px;height:64px;border-radius:12px;background:${tint(inst?.tint)}"></span>
-        <div class="row" style="gap:6px" role="group" aria-label="${esc(t('cover.title'))}">${tintButtons(inst?.tint ?? 0, 'pickCover')}</div>
+        <span class="thumb" style="width:64px;height:64px;border-radius:12px;${coverBg(inst)}"></span>
+        <div class="row" style="gap:6px" role="group" aria-label="${esc(t('cover.title'))}">${tintButtons(inst?.tint ?? 0, 'pickTint')}</div>
+      </div>
+      <div class="row" style="gap:6px">
+        <button class="btn sm" data-action="pickCover" data-id="${esc(d.id)}">${icon.upload(16)}<span>${esc(t('cover.custom'))}</span></button>
+        ${inst?.coverImage ? `<button class="btn sm" data-action="clearCover" data-id="${esc(d.id)}">${esc(t('cover.remove'))}</button>` : ''}
       </div>
       <div class="row" style="justify-content:flex-end"><button class="btn accent" data-action="closeDialog">${esc(t('common.close'))}</button></div>
     </div></div>`;
@@ -1008,6 +1141,23 @@ function renderOverlay() {
         <button class="btn" data-action="changeJust">${esc(t('is.changeJust'))}</button>
         <button class="btn accent" data-action="changeCopy">${esc(t('is.changeCopy'))}</button>
       </div></div></div>`;
+  }
+  if (d?.type === 'updates') html += updatesDialog();
+  if (d?.type === 'deleteWorld') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="row" style="align-items:flex-start;gap:14px;flex-wrap:nowrap">
+        <span class="avatar" style="background:var(--warn-soft);color:var(--warn-text)">${icon.warn()}</span>
+        <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('worlds.deleteTitle', { name: d.folder }))}</h2><p class="note">${esc(t('worlds.deleteText'))}</p></div>
+      </div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
+        <button class="btn" data-action="copyWorld" data-folder="${esc(d.folder)}">${esc(t('worlds.copy'))}</button>
+        <button class="btn accent" data-action="deleteWorld" data-folder="${esc(d.folder)}">${esc(t('common.delete'))}</button>
+      </div></div></div>`;
+  }
+  if (state.importing) {
+    html += `<div class="toast" role="status"><div class="stack" style="gap:8px;min-width:260px"><span>${esc(t('inst.importing', state.importing))}</span>
+      <div class="bar"><span style="width:${state.importing.total ? Math.round(state.importing.done / state.importing.total * 100) : 5}%"></span></div></div></div>`;
   }
   if (state.ctx) html += contextMenu();
   if (state.mods.dragging && state.view === 'instance' && state.instTab === 'mods') {
@@ -1111,10 +1261,36 @@ function subscribe() {
     }
     render();
   });
+  on('import-progress', (p) => {
+    state.importing = p.done < p.total ? p : null;
+    renderOverlay();
+  });
   on('update-progress', (u) => {
     state.updating = u;
     renderOverlay();
   });
+}
+
+async function afterCoverChange(inst) {
+  await loadInstances();
+  if (state.edit?.id === inst.id) state.edit.coverImage = inst.coverImage;
+  render();
+}
+
+async function importFlow(path) {
+  try {
+    const inst = await api.importMrpack(path);
+    state.importing = null;
+    if (!inst) return renderOverlay();
+    await loadInstances();
+    state.selectedId = inst.id;
+    state.view = 'home';
+    render(true);
+    toast(t('inst.imported', { name: inst.name }));
+  } catch (e) {
+    state.importing = null;
+    toast(String(e) === 'NOT_MRPACK' ? t('inst.notMrpack') : t('error.generic', { message: e }), true);
+  }
 }
 
 async function saveQuick(inst) {
@@ -1280,7 +1456,110 @@ const actions = {
     }
   },
 
-  setInstTab: (d) => { state.instTab = d.tab; render(); },
+  setInstTab: (d) => {
+    state.instTab = d.tab;
+    if (d.tab === 'worlds') state.worlds.list = null;
+    if (d.tab === 'screens') state.shots.list = null;
+    if (d.tab === 'mods') state.mods.list = null;
+    render();
+  },
+  install: async (d) => {
+    const r = state.res;
+    if (r.kind === 'datapack') return toast(t('res.datapackSoon'));
+    if (r.kind === 'modpack') {
+      r.installing[d.pid] = true; render();
+      try {
+        const inst = await api.installModpack(d.pid);
+        await loadInstances();
+        state.selectedId = inst.id;
+        toast(t('res.modpackDone', { name: inst.name }));
+      } catch (e) { toast(t('error.generic', { message: e }), true); }
+      delete r.installing[d.pid]; state.importing = null; render();
+      return;
+    }
+    const target = state.instances.find((i) => i.id === r.targetId) || selected();
+    if (!target) return toast(t('res.noTarget'), true);
+    if (r.kind === 'mod' && target.loader === 'vanilla') return toast(t('res.vanillaTarget'), true);
+    r.installing[d.pid] = true; render();
+    try {
+      const res = await api.installProject(target.id, d.pid);
+      const [first, ...rest] = res.installed;
+      toast(t('res.installedToast', { list: first || d.title }) + (rest.length ? '. ' + t('res.alsoInstalled', { list: rest.join(', ') }) : ''));
+      r.installed.add(d.pid);
+      if (state.mods.id === target.id) state.mods.list = null;
+    } catch (e) {
+      const code = String(e);
+      if (code.startsWith('NO_COMPATIBLE_VERSION')) toast(t('res.noCompatible', { name: code.split(':').slice(1).join(':') || d.title, version: target.gameVersion, loader: loaderLabel(target.loader) }), true);
+      else toast(t('error.generic', { message: code }), true);
+    }
+    delete r.installing[d.pid]; render();
+  },
+  checkUpdates: async (d) => {
+    state.mods.checking = true; render();
+    try {
+      const list = await api.checkModUpdates(d.id);
+      if (!list.length) toast(t('mods.noUpdates'));
+      else state.dialog = { type: 'updates', list, picked: new Set(list.map((_, n) => n)), busy: false };
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+    state.mods.checking = false; render();
+  },
+  applyUpdates: async () => {
+    const d = state.dialog;
+    d.busy = true; renderOverlay();
+    try {
+      const n = await api.applyModUpdates(state.edit.id, d.list.filter((_, i) => d.picked.has(i)));
+      state.dialog = null;
+      toast(t('mods.updDone', { n }));
+      state.mods.list = null;
+    } catch (e) { d.busy = false; toast(t('error.generic', { message: e }), true); }
+    render();
+  },
+  share: async (d) => {
+    state.ctx = null;
+    if (!inApp) return toast(t('inst.exported', { path: 'сборка.mrpack' }));
+    try {
+      const path = await api.exportMrpack(d.id);
+      if (path) toast(t('inst.exported', { path }));
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+    renderOverlay();
+  },
+  ctxShare: (d) => actions.share(d),
+  importPack: () => importFlow(null),
+  pickCover: async (d) => {
+    if (!inApp) return toast(t('common.comingSoon'));
+    try {
+      const inst = await api.pickCover(d.id);
+      if (inst) await afterCoverChange(inst);
+    } catch (e) { toast(String(e) === 'BAD_IMAGE' ? t('cover.badImage') : t('error.generic', { message: e }), true); }
+  },
+  clearCover: async (d) => {
+    try { await afterCoverChange(await api.clearCover(d.id)); } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  shotCover: async (d) => {
+    try { await afterCoverChange(await api.coverFromScreenshot(state.edit.id, d.file)); toast(t('shots.coverDone')); }
+    catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  openShot: async (d) => { try { await api.openScreenshot(state.edit.id, d.file); } catch (e) { toast(t('error.generic', { message: e }), true); } },
+  deleteShot: async (d) => {
+    try { await api.deleteScreenshot(state.edit.id, d.file); state.shots.list = state.shots.list.filter((x) => x.file !== d.file); render(); }
+    catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  copyWorld: async (d) => {
+    try {
+      const name = await api.copyWorld(state.edit.id, d.folder, t('worlds.copySuffix'));
+      toast(t('worlds.copied', { name }));
+      if (state.dialog?.type === 'deleteWorld') state.dialog = null;
+      state.worlds.list = null; render();
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  openWorld: async (d) => { try { await api.openWorldFolder(state.edit.id, d.folder); } catch (e) { toast(t('error.generic', { message: e }), true); } },
+  askDeleteWorld: (d) => { state.dialog = { type: 'deleteWorld', folder: d.folder }; renderOverlay(); },
+  deleteWorld: async (d) => {
+    state.dialog = null;
+    try { await api.deleteWorld(state.edit.id, d.folder); toast(t('worlds.deleted')); state.worlds.list = null; }
+    catch (e) { toast(t('error.generic', { message: e }), true); }
+    render();
+  },
   setEditTint: (d) => { state.edit.tint = Number(d.n); render(); },
   setEditLoader: (d) => {
     if (state.edit.loader !== d.loader) { state.edit.loader = d.loader; state.edit.loaderVersion = ''; }
@@ -1346,7 +1625,7 @@ const actions = {
     state.dialog = null;
     render();
   },
-  pickCover: async (d) => {
+  pickTint: async (d) => {
     const inst = state.instances.find((i) => i.id === state.dialog.id);
     if (!inst) return;
     await saveQuick({ ...inst, tint: Number(d.n) });
@@ -1415,6 +1694,12 @@ document.addEventListener('input', (ev) => {
 
 document.addEventListener('change', (ev) => {
   const el = ev.target;
+  if (el.dataset.upd !== undefined && state.dialog?.type === 'updates') {
+    const n = Number(el.dataset.upd);
+    if (el.checked) state.dialog.picked.add(n); else state.dialog.picked.delete(n);
+    renderOverlay();
+    return;
+  }
   if (el.dataset.change) changes[el.dataset.change]?.(el.value);
   if (el.dataset.bind && el.tagName === 'SELECT') setPath(el.dataset.bind, el.value);
   if ('saveSettings' in el.dataset) saveSettings();
@@ -1438,6 +1723,11 @@ document.addEventListener('contextmenu', (ev) => {
 // Перетаскивание .jar-файлов в окно → в моды открытой сборки
 onFileDrop(async (p) => {
   const onMods = state.view === 'instance' && state.instTab === 'mods' && state.edit && state.edit.loader !== 'vanilla';
+  if (p.type === 'drop' && !onMods) {
+    const pack = (p.paths || []).find((f) => /\.mrpack$/i.test(f));
+    if (pack) importFlow(pack);
+    return;
+  }
   if (!onMods) return;
   if (p.type === 'enter' || p.type === 'over') {
     if (!state.mods.dragging) { state.mods.dragging = true; renderOverlay(); }
@@ -1479,6 +1769,7 @@ async function init() {
   applySettings();
   subscribe();
   try { await loadInstances(); } catch (e) { toast(t('error.generic', { message: e }), true); }
+  try { state.dataDir = await api.dataDir(); } catch { /* без обложек тоже можно */ }
   try { state.accounts = await api.listAccounts(); } catch { /* без аккаунтов тоже можно жить */ }
   try { state.running = new Set(await api.runningInstances()); } catch { /* ничего */ }
   render();

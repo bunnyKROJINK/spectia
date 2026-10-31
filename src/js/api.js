@@ -22,6 +22,26 @@ export const api = {
   duplicateInstance: (id, name) => call('duplicate_instance', { id, name: name || '' }),
   getLoaderVersions: (loader, gameVersion) => call('get_loader_versions', { loader, gameVersion }),
 
+  installProject: (id, projectId) => call('install_project', { id, projectId }),
+  installedProjects: (id) => call('installed_projects', { id }),
+  checkModUpdates: (id) => call('check_mod_updates', { id }),
+  applyModUpdates: (id, updates) => call('apply_mod_updates', { id, updates }),
+  exportMrpack: (id) => call('export_mrpack', { id }),
+  importMrpack: (path) => call('import_mrpack', { path: path || null }),
+  installModpack: (projectId) => call('install_modpack', { projectId }),
+
+  dataDir: () => call('data_dir'),
+  listWorlds: (id) => call('list_worlds', { id }),
+  copyWorld: (id, folder, suffix) => call('copy_world', { id, folder, suffix }),
+  deleteWorld: (id, folder) => call('delete_world', { id, folder }),
+  openWorldFolder: (id, folder) => call('open_world_folder', { id, folder }),
+  listScreenshots: (id) => call('list_screenshots', { id }),
+  openScreenshot: (id, file) => call('open_screenshot', { id, file }),
+  deleteScreenshot: (id, file) => call('delete_screenshot', { id, file }),
+  pickCover: (id) => call('pick_cover', { id }),
+  coverFromScreenshot: (id, file) => call('cover_from_screenshot', { id, file }),
+  clearCover: (id) => call('clear_cover', { id }),
+
   listMods: (id) => call('list_mods', { id }),
   toggleMod: (id, file) => call('toggle_mod', { id, file }),
   deleteMod: (id, file) => call('delete_mod', { id, file }),
@@ -58,6 +78,12 @@ export const win = {
   toggleMaximize: () => inApp && TAURI.window.getCurrentWindow().toggleMaximize(),
   close: () => (inApp ? TAURI.window.getCurrentWindow().close() : null),
 };
+
+/** Превращает путь к файлу на диске в адрес, который можно показать в <img>. */
+export function fileUrl(path) {
+  if (!path) return '';
+  return inApp ? TAURI.core.convertFileSrc(path) : '';
+}
 
 /** Открывает ссылку в браузере по умолчанию. */
 export function openUrl(url) {
@@ -159,6 +185,25 @@ async function mockInvoke(cmd, args = {}) {
       return null;
     }
     case 'add_mods': return 0;
+    case 'install_project': await sleep(700); return { installed: args.projectId === 'iris' ? ['Iris Shaders', 'Sodium'] : ['Мод'] };
+    case 'installed_projects': return [];
+    case 'check_mod_updates': await sleep(600); return [
+      { file: 'sodium-fabric-0.7.jar', name: 'Sodium', current: '0.7.0', latest: '0.7.2', url: '', filename: 'sodium-0.7.2.jar', sha1: '', projectId: 'AANobbMI', versionId: 'x' },
+      { file: 'farmersdelight.jar', name: "Farmer's Delight", current: '1.2.6', latest: '1.2.7', url: '', filename: 'fd-1.2.7.jar', sha1: '', projectId: 'R2OftAxM', versionId: 'y' },
+    ];
+    case 'apply_mod_updates': await sleep(500); return args.updates.length;
+    case 'export_mrpack': return 'C:\\Users\\Мари\\Desktop\\сборка.mrpack';
+    case 'import_mrpack': return null;
+    case 'install_modpack': return mockInvoke('create_instance', { data: { name: 'Готовая сборка', gameVersion: '26.3', loader: 'fabric', tint: 3 } });
+    case 'data_dir': return '';
+    case 'list_worlds': return [
+      { folder: 'Вечная зима', lastPlayed: Date.now() / 1000 - 3600, size: 48_000_000, icon: '' },
+      { folder: 'Тест', lastPlayed: Date.now() / 1000 - 86400 * 3, size: 6_500_000, icon: '' },
+    ];
+    case 'copy_world': return args.folder + ' (' + args.suffix + ')';
+    case 'delete_world': case 'open_world_folder': case 'open_screenshot': case 'delete_screenshot': return null;
+    case 'list_screenshots': return [];
+    case 'pick_cover': case 'cover_from_screenshot': case 'clear_cover': return store.get('instances', []).find((i) => i.id === args.id);
 
     case 'list_accounts': return accountInfo();
     case 'add_ely_account': {
