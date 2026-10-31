@@ -1,6 +1,6 @@
 [package]
 name = "spectia"
-version = "0.4.0"
+version = "0.4.1"
 description = "Spectia — красивый лаунчер для Minecraft"
 authors = ["bunnyKROJINK"]
 license = "GPL-3.0-only"

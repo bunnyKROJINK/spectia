@@ -12,8 +12,9 @@ import { t, setLang, LANGS, formatNumber } from './i18n.js';
 import { THEMES, THEME_ORDER, TINTS, applyTheme } from './themes.js';
 import { icon, heroArt } from './icons.js';
 import { searchModrinth } from './modrinth.js';
+import { matchScore } from './search.js';
 
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.4.1';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
@@ -518,8 +519,7 @@ function instMods(e) {
     if (!m.loading) loadMods(e.id);
     return `<div class="row" style="padding:20px"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
   }
-  const q = m.query.trim().toLowerCase();
-  const list = q ? m.list.filter((x) => (x.name + ' ' + x.file).toLowerCase().includes(q)) : m.list;
+  const list = m.list;
   const on = m.list.filter((x) => x.enabled).length;
   const head = `<div class="row between">
       <div class="row" style="flex:1 1 280px">
@@ -538,7 +538,7 @@ function instMods(e) {
       <h2 class="h2">${esc(t('mods.empty'))}</h2><p class="note">${esc(t('mods.emptySub'))}</p></section>`;
   }
   return head + `<section class="panel list" id="mods-list">
-    ${list.map((x) => `<div class="list-row mod-row ${x.enabled ? '' : 'off'}">
+    ${list.map((x) => `<div class="list-row mod-row ${x.enabled ? '' : 'off'}" data-name="${esc(x.name)}" data-file="${esc(x.file)}" ${modMatches(x) ? '' : 'hidden'}>
       <span class="thumb mod-icon" aria-hidden="true">${esc((x.name || '?').charAt(0).toUpperCase())}</span>
       <div class="stack grow" style="gap:2px">
         <span class="row" style="gap:8px"><span class="card-title" style="font-size:14px">${esc(x.name)}</span>${x.version ? `<span class="badge">${esc(x.version)}</span>` : ''}</span>
@@ -675,6 +675,19 @@ function instLaunch(e) {
     </section>`;
 }
 
+function modMatches(x) {
+  const q = state.mods.query.trim();
+  if (!q) return true;
+  return matchScore(q, x.name, x.file.replace(/\.jar(\.disabled)?$/i, '')) > 0;
+}
+
+/** Фильтр модов: просто прячем лишние строки, поле поиска не трогаем. */
+function filterModRows() {
+  document.querySelectorAll('#mods-list .mod-row').forEach((row) => {
+    row.hidden = !modMatches({ name: row.dataset.name, file: row.dataset.file });
+  });
+}
+
 async function loadMods(id) {
   state.mods = { ...state.mods, id, loading: true, list: state.mods.id === id ? state.mods.list : null };
   try {
@@ -698,10 +711,11 @@ async function loadInstalled(id) {
   if (!id) return;
   state.res.installedFor = id;
   try { state.res.installed = new Set(await api.installedProjects(id)); } catch { state.res.installed = new Set(); }
-  if (state.view === 'resources') render();
+  refreshResults();
 }
 
-function viewResources() {
+/** Только список результатов (без поля поиска), чтобы при вводе не сбивался курсор. */
+function resultsHtml() {
   const r = state.res;
   const target = state.instances.find((i) => i.id === r.targetId) || selected();
   if (target && r.installedFor !== target.id) loadInstalled(target.id);
@@ -735,6 +749,12 @@ function viewResources() {
       </article>`).join('')}
     </div>`;
   }
+  return results;
+}
+
+function viewResources() {
+  const r = state.res;
+  const target = state.instances.find((i) => i.id === r.targetId) || selected();
 
   return `<div class="view">
     <h1 class="page-title">${esc(t('res.title'))}</h1>
@@ -760,7 +780,7 @@ function viewResources() {
       </div>
       ${target ? `<span class="small muted">${esc(t('res.filterNote', { version: target.gameVersion, loader: loaderLabel(target.loader) }))}</span>` : ''}
     </section>
-    ${results}
+    <div id="res-results">${resultsHtml()}</div>
   </div>`;
 }
 
@@ -959,12 +979,12 @@ function elyDialog() {
     ${e.need2fa ? `
       <p class="note">${esc(t('acc.totpNote'))}</p>
       <div class="field"><label for="ely-totp" class="label">${esc(t('acc.totp'))}</label>
-        <input id="ely-totp" class="input mono" inputmode="numeric" autocomplete="one-time-code" maxlength="8" value="${esc(e.totp)}" data-bind="ely.totp" autofocus></div>`
+        <input id="ely-totp" class="input mono" inputmode="numeric" autocomplete="off" maxlength="8" value="${esc(e.totp)}" data-bind="ely.totp" autofocus></div>`
     : `
       <div class="field"><label for="ely-login" class="label">${esc(t('acc.login'))}</label>
-        <input id="ely-login" class="input" autocomplete="username" value="${esc(e.username)}" data-bind="ely.username" autofocus></div>
+        <input id="ely-login" class="input" autocomplete="off" value="${esc(e.username)}" data-bind="ely.username" autofocus></div>
       <div class="field"><label for="ely-pass" class="label">${esc(t('acc.password'))}</label>
-        <input id="ely-pass" class="input" type="password" autocomplete="current-password" value="${esc(e.password)}" data-bind="ely.password"></div>
+        <input id="ely-pass" class="input" type="password" autocomplete="off" value="${esc(e.password)}" data-bind="ely.password"></div>
       <p class="note">${esc(t('acc.passwordNote'))}</p>`}
     ${e.error ? `<p class="warn" role="alert">${esc(e.error)}</p>` : ''}
     <div class="row between">
@@ -1181,6 +1201,16 @@ function render(scrollTop = false) {
   renderOverlay();
 }
 
+// Отключаем «Сохранённые сведения» (автозаполнение Windows) во всех полях ввода
+new MutationObserver(() => {
+  document.querySelectorAll('input:not([data-noauto]), textarea:not([data-noauto])').forEach((el) => {
+    el.setAttribute('autocomplete', 'off');
+    el.setAttribute('autocorrect', 'off');
+    el.setAttribute('spellcheck', 'false');
+    el.setAttribute('data-noauto', '');
+  });
+}).observe(document.body, { childList: true, subtree: true });
+
 // ---------- Поиск ----------
 
 let searchTimer;
@@ -1191,7 +1221,7 @@ async function runSearch() {
   const target = state.instances.find((i) => i.id === r.targetId) || selected();
   const seq = ++searchSeq;
   r.loading = true; r.error = false;
-  if (state.view === 'resources') render();
+  refreshResults();
   try {
     const results = await searchModrinth({ query: r.query, kind: r.kind, gameVersion: target?.gameVersion, loader: target?.loader });
     if (seq !== searchSeq) return; // пришёл ответ на старый запрос — пропускаем
@@ -1201,7 +1231,15 @@ async function runSearch() {
     r.error = true;
   }
   r.loading = false;
-  if (state.view === 'resources') render();
+  refreshResults();
+}
+
+/** Перерисовывает только результаты поиска, не трогая поле ввода. */
+function refreshResults() {
+  if (state.view !== 'resources') return;
+  const box = $('#res-results');
+  if (box) box.innerHTML = resultsHtml();
+  else render();
 }
 
 // ---------- Запуск игры ----------
@@ -1480,7 +1518,7 @@ const actions = {
     const target = state.instances.find((i) => i.id === r.targetId) || selected();
     if (!target) return toast(t('res.noTarget'), true);
     if (r.kind === 'mod' && target.loader === 'vanilla') return toast(t('res.vanillaTarget'), true);
-    r.installing[d.pid] = true; render();
+    r.installing[d.pid] = true; refreshResults();
     try {
       const res = await api.installProject(target.id, d.pid);
       const [first, ...rest] = res.installed;
@@ -1492,7 +1530,7 @@ const actions = {
       if (code.startsWith('NO_COMPATIBLE_VERSION')) toast(t('res.noCompatible', { name: code.split(':').slice(1).join(':') || d.title, version: target.gameVersion, loader: loaderLabel(target.loader) }), true);
       else toast(t('error.generic', { message: code }), true);
     }
-    delete r.installing[d.pid]; render();
+    delete r.installing[d.pid]; refreshResults();
   },
   checkUpdates: async (d) => {
     state.mods.checking = true; render();
@@ -1679,13 +1717,7 @@ document.addEventListener('input', (ev) => {
   const value = 'number' in el.dataset ? Number(el.value) : el.value;
   setPath(el.dataset.bind, value);
   if (el.id === 'mem') $('#mem-label').textContent = value + ' ' + t('unit.gb');
-  if ('filterMods' in el.dataset) {
-    const pos = el.selectionStart;
-    render();
-    const again = $('#modq');
-    again?.focus();
-    again?.setSelectionRange(pos, pos);
-  }
+  if ('filterMods' in el.dataset) filterModRows();
   if ('search' in el.dataset) {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(runSearch, 350);

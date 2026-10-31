@@ -2,6 +2,7 @@
    Все цвета берутся из CSS-переменных, которые выставляет js/themes.js. */
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body {
   margin: 0;
