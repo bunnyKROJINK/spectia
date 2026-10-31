@@ -26,6 +26,8 @@ pub struct Instance {
     pub loader_version: String,
     /// Номер цвета обложки (0–5)
     pub tint: u8,
+    /// Своя картинка-обложка (файл в папке сборки), пусто = градиент
+    pub cover_image: String,
     /// Память в гигабайтах
     pub memory_gb: u8,
     /// Пусто = подобрать Java автоматически
@@ -56,6 +58,7 @@ impl Default for Instance {
             loader: "vanilla".into(),
             loader_version: String::new(),
             tint: 0,
+            cover_image: String::new(),
             memory_gb: 4,
             java_path: String::new(),
             window_width: 1280,
@@ -75,7 +78,7 @@ impl Default for Instance {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct NewInstance {
     pub name: String,
@@ -84,6 +87,10 @@ pub struct NewInstance {
     #[serde(default)]
     pub loader_version: String,
     pub tint: u8,
+}
+
+pub fn now_secs() -> u64 {
+    now()
 }
 
 fn now() -> u64 {
@@ -138,7 +145,7 @@ pub fn read(app: &AppHandle, id: &str) -> Result<Instance, String> {
     Ok(inst)
 }
 
-fn write_instance(dir: &PathBuf, inst: &Instance) -> Result<(), String> {
+pub fn write_instance(dir: &PathBuf, inst: &Instance) -> Result<(), String> {
     let text = serde_json::to_string_pretty(inst).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("instance.json"), text).map_err(|e| format!("не смогли сохранить сборку: {e}"))
 }
@@ -164,6 +171,11 @@ pub fn list_instances(app: AppHandle) -> Result<Vec<Instance>, String> {
 
 #[tauri::command]
 pub fn create_instance(app: AppHandle, data: NewInstance) -> Result<Instance, String> {
+    create(&app, data)
+}
+
+pub fn create(app: &AppHandle, data: NewInstance) -> Result<Instance, String> {
+    let app = app.clone();
     let name = data.name.trim();
     let name = if name.is_empty() { "Новая сборка" } else { name };
     let id = format!("{}-{}", slugify(name), now());
@@ -197,6 +209,7 @@ pub fn update_instance(app: AppHandle, instance: Instance) -> Result<Instance, S
         inst.play_time_secs = old.play_time_secs;
         inst.last_played = old.last_played;
         inst.created_at = old.created_at;
+        inst.cover_image = old.cover_image;
     }
     write_instance(&dir, &inst)?;
     Ok(inst)

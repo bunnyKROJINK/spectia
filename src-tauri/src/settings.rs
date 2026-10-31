@@ -11,6 +11,8 @@ pub struct Settings {
     pub theme: String,
     pub language: String,
     pub reduce_motion: bool,
+    /// Плавающие украшения в тематических темах
+    pub show_decorations: bool,
     pub hide_on_launch: bool,
     pub check_updates: bool,
     pub auto_java: bool,
@@ -24,6 +26,7 @@ impl Default for Settings {
             theme: "sakura".into(),
             language: "ru".into(),
             reduce_motion: false,
+            show_decorations: true,
             hide_on_launch: true,
             check_updates: true,
             auto_java: true,

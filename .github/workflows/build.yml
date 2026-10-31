@@ -50,7 +50,7 @@ jobs:
           set -o pipefail
           cargo test --manifest-path src-tauri/Cargo.toml 2>&1 | tee -a ci.log
 
-      - name: Проверка запуска Minecraft (ванилла, Fabric, NeoForge, Forge)
+      - name: Проверка запуска Minecraft и установки модов
         run: |
           set -o pipefail
           cargo test --manifest-path src-tauri/Cargo.toml end_to_end -- --ignored --nocapture --test-threads=1 2>&1 | tee -a ci.log
