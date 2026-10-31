@@ -1,0 +1,55 @@
+# Собирает установщик Spectia для Windows.
+#
+# • Каждый раз, когда в ветку main приходит новый код, GitHub сам собирает .exe.
+#   Готовый файл лежит во вкладке Actions → нужная сборка → Artifacts.
+# • Если создать тег вида v0.1.0, установщик ещё и появится на странице Releases.
+
+name: Сборка
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Установка инструментов
+        run: npm install
+
+      - name: Проверка кода на Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Сборка установщика
+        run: npm run build
+
+      - name: Сохранить установщик
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spectia-Windows
+          path: src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Опубликовать релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/nsis/*.exe
+          generate_release_notes: true
