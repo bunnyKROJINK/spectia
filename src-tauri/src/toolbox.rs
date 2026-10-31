@@ -308,3 +308,124 @@ pub fn precheck(app: AppHandle, id: String) -> Result<Vec<Problem>, String> {
     }
     Ok(out)
 }
+
+// ---------- Умная память ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAdvice {
+    pub mods: usize,
+    pub shaders: bool,
+    pub system_gb: u32,
+    pub recommended: u32,
+    /// Больше этого лучше не давать: половина памяти компьютера
+    pub cap: u32,
+    pub limited: bool,
+}
+
+/// Сколько памяти советуем: по числу модов и шейдерам.
+pub fn recommend(loader: &str, mods: usize, shaders: bool) -> u32 {
+    let base = if loader == "vanilla" {
+        2
+    } else {
+        match mods {
+            0..=20 => 3,
+            21..=60 => 4,
+            61..=120 => 5,
+            121..=200 => 6,
+            201..=300 => 8,
+            _ => 10,
+        }
+    };
+    base + if shaders { 1 } else { 0 }
+}
+
+/// Сколько оперативной памяти у компьютера, в ГБ (0 — не получилось узнать)
+pub fn system_memory_gb() -> u32 {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct MemoryStatusEx {
+            length: u32,
+            memory_load: u32,
+            total_phys: u64,
+            avail_phys: u64,
+            total_page_file: u64,
+            avail_page_file: u64,
+            total_virtual: u64,
+            avail_virtual: u64,
+            avail_extended_virtual: u64,
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
+        }
+        let mut s = MemoryStatusEx {
+            length: std::mem::size_of::<MemoryStatusEx>() as u32,
+            memory_load: 0,
+            total_phys: 0,
+            avail_phys: 0,
+            total_page_file: 0,
+            avail_page_file: 0,
+            total_virtual: 0,
+            avail_virtual: 0,
+            avail_extended_virtual: 0,
+        };
+        // SAFETY: структура нужного размера, length заполнен, как требует WinAPI
+        let ok = unsafe { GlobalMemoryStatusEx(&mut s) };
+        if ok != 0 {
+            return ((s.total_phys as f64) / 1024f64.powi(3)).round() as u32;
+        }
+        0
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+        text.lines()
+            .find_map(|l| l.strip_prefix("MemTotal:"))
+            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
+            .map(|kb| ((kb as f64) / 1024f64.powi(2)).round() as u32)
+            .unwrap_or(0)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+            .map(|b| ((b as f64) / 1024f64.powi(3)).round() as u32)
+            .unwrap_or(0)
+    }
+}
+
+#[tauri::command]
+pub fn memory_advice(app: AppHandle, id: String) -> Result<MemoryAdvice, String> {
+    let inst = instances::read(&app, &id)?;
+    let mods = if inst.loader == "vanilla" {
+        0
+    } else {
+        let dir = mods::mods_dir(&app, &id)?;
+        mod_files(&dir).into_iter().filter(|f| !f.ends_with(".disabled")).count()
+    };
+    let shader_dir = instances::dir(&app, &id)?.join("minecraft").join("shaderpacks");
+    let shaders = std::fs::read_dir(&shader_dir).map(|mut d| d.next().is_some()).unwrap_or(false);
+    let system_gb = system_memory_gb();
+    let cap = if system_gb == 0 { 16 } else { (system_gb / 2).clamp(2, 32) };
+    let want = recommend(&inst.loader, mods, shaders);
+    Ok(MemoryAdvice { mods, shaders, system_gb, recommended: want.min(cap), cap, limited: want > cap })
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn recommendations_grow_with_mods() {
+        assert_eq!(recommend("vanilla", 0, false), 2);
+        assert_eq!(recommend("fabric", 10, false), 3);
+        assert_eq!(recommend("forge", 150, true), 7);
+        assert!(recommend("neoforge", 400, false) >= 10);
+        assert!(system_memory_gb() > 0);
+    }
+}

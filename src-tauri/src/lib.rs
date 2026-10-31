@@ -110,6 +110,7 @@ pub fn run() {
             toolbox::delete_profile,
             toolbox::apply_profile,
             toolbox::precheck,
+            toolbox::memory_advice,
             prism::find_prism_accounts,
             accounts::add_prism_account,
             history::mod_history,

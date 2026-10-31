@@ -786,3 +786,23 @@ body.is-mini .rail, body.is-mini .sidebar { display: none; }
 .speed-bars i.on { background: var(--accent); }
 .mini .dlbtn, .mini .dl-speed { display: none; }
 @media (prefers-reduced-motion: reduce) { .dl-ring.spin, #dlpanel { animation: none; } }
+
+/* ---------- 1.0: умная память ---------- */
+.mem-advice { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+
+/* ---------- 1.0: знакомство ---------- */
+#tour { position: fixed; inset: 0; z-index: 120; }
+#tour[hidden] { display: none; }
+.tour-dim { position: absolute; inset: 0; background: rgba(4, 6, 16, .62); }
+.tour-spot { position: absolute; border-radius: 12px; box-shadow: 0 0 0 9999px rgba(4, 6, 16, .62), 0 0 0 2px var(--accent), 0 0 24px 4px color-mix(in srgb, var(--accent) 55%, transparent);
+  transition: left .28s ease, top .28s ease, width .28s ease, height .28s ease; pointer-events: none; }
+.tour-card { position: absolute; width: min(360px, calc(100vw - 16px)); display: flex; flex-direction: column; gap: 10px; padding: 18px;
+  border-radius: 16px; background: var(--card2, var(--card)); border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0,0,0,.5); animation: dlIn .2s ease; }
+.tour-card .h2 { margin: 0; }
+.tour-text { margin: 0; line-height: 1.5; }
+.tour-lang { display: flex; flex-direction: column; gap: 6px; }
+.tour-dots { display: flex; gap: 5px; }
+.tour-dots i { display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+.tour-dots i.on { width: 18px; border-radius: 3px; background: var(--accent); }
+.reduce-motion .tour-spot, .reduce-motion .tour-card { transition: none; animation: none; }

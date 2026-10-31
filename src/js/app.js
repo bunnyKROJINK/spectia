@@ -8,7 +8,7 @@
 
 import { api, win, openUrl, inApp, on, onFileDrop, fileUrl } from './api.js';
 import { renderDecorations } from './decorations.js';
-import { t, setLang, LANGS, formatNumber } from './i18n.js';
+import { t, setLang, getLang, LANGS, formatNumber } from './i18n.js';
 import { THEMES, THEME_ORDER, TINTS } from './themes.js';
 import { applyAppearance, applyZoom, resolveTheme, themeFromColors, lum as lumOf } from './appearance.js';
 import { chime } from './sound.js';
@@ -19,9 +19,10 @@ import { searchModrinth, CATEGORIES, projectDetails, trending } from './modrinth
 import { diagnose, crashDescription, lineLevel } from './doctor.js';
 import { ACHIEVEMENTS, SEASONAL, PERFECT, TIERS, artSvg, facts, newlyUnlocked, wrappedYear, wrappedData, find as findAch, tierOf } from './achievements.js';
 import { matchScore } from './search.js';
+import { startTour } from './tour.js';
 import { initDownloads, onNetStats, onLaunchProgress, finish as finishDownload, dlButtonHtml, toggleDownloads, clearDownloads } from './downloads.js';
 
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '1.0.0';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
@@ -318,7 +319,7 @@ function loadHomeInfo(inst) {
   return homeInfo[inst.id];
 }
 
-const HIST_TAG = { installed: ['+ УСТ', '#4ED39A'], added: ['+ ФАЙЛ', '#4ED39A'], appeared: ['+ ПАПКА', '#4ED39A'], updated: ['↑ ОБН', 'var(--accent-text)'], enabled: ['● ВКЛ', 'var(--accent-text)'], disabled: ['○ ВЫКЛ', 'var(--muted)'], removed: ['− УДАЛ', 'var(--warn-text)'], vanished: ['− ПАПКА', 'var(--warn-text)'], restored: ['↺ ВЕРН', '#4ED39A'], snapshot: ['↺ СНИМОК', 'var(--accent-text)'], profile: ['◆ ПРОФ', 'var(--accent-text)'] };
+const HIST_TAG = { installed: ['+', '#4ED39A'], added: ['+', '#4ED39A'], appeared: ['+', '#4ED39A'], updated: ['↑', 'var(--accent-text)'], enabled: ['●', 'var(--accent-text)'], disabled: ['○', 'var(--muted)'], removed: ['−', 'var(--warn-text)'], vanished: ['−', 'var(--warn-text)'], restored: ['↺', '#4ED39A'], snapshot: ['↺', 'var(--accent-text)'], profile: ['◆', 'var(--accent-text)'] };
 
 function viewHome() {
   const cur = selected();
@@ -378,7 +379,8 @@ function viewHome() {
         <span class="eyebrow-mono" style="padding-bottom:8px">${esc(t('home.recent'))}</span>
         ${hist === null ? `<div class="row" style="padding:10px 0"><span class="spinner"></span></div>`
           : hist.length ? hist.map((ev) => {
-            const [tag, color] = HIST_TAG[ev.action] || ['•', 'var(--muted)'];
+            const [sym, color] = HIST_TAG[ev.action] || ['•', 'var(--muted)'];
+            const tag = HIST_TAG[ev.action] ? sym + ' ' + t('hist.tag.' + ev.action) : sym;
             return `<div style="display:grid;grid-template-columns:84px minmax(0,1fr) auto;gap:12px;padding:10px 0;border-top:1px solid var(--line);align-items:center">
               <span class="hist-tag" style="color:${color}">${esc(tag)}</span><span class="ellipsis">${esc(ev.name)}${ev.action === 'updated' && ev.detail ? ` <span class="muted small">${esc(ev.detail)}</span>` : ''}</span><span class="small muted">${esc(ago(ev.time))}</span></div>`;
           }).join('')
@@ -1146,6 +1148,27 @@ async function loadShots(id) {
   if (state.view === 'instance') render();
 }
 
+function memAdviceHtml(e) {
+  const m = state.memAdvice?.id === e.id ? state.memAdvice : null;
+  if (!m || m.loading) {
+    return `<button class="btn" style="align-self:flex-start" data-action="adviseMemory" ${m?.loading ? 'disabled' : ''}>${m?.loading ? `<span class="spinner"></span>` : icon.sparkle(14)}<span>${esc(t('mem.advise'))}</span></button>`;
+  }
+  const a = m.data;
+  const why = [];
+  why.push(e.loader === 'vanilla' ? t('mem.whyVanilla') : t('mem.whyMods', { n: a.mods }));
+  if (a.shaders) why.push(t('mem.whyShaders'));
+  const same = Number(e.memoryGb) === a.recommended;
+  return `<div class="mem-advice">
+    <div class="stack" style="gap:4px">
+      <b>${esc(t('mem.result', { n: a.recommended }))}</b>
+      <span class="small">${esc(why.join(' · '))}</span>
+      <span class="small muted">${esc(a.systemGb ? t('mem.system', { total: a.systemGb, cap: a.cap }) : t('mem.systemUnknown'))}</span>
+      ${a.limited ? `<span class="small" style="color:var(--warn-text)">${esc(t('mem.limited'))}</span>` : ''}
+    </div>
+    ${same ? `<span class="badge">${esc(t('mem.already'))}</span>` : `<button class="btn accent" data-action="applyMemory" data-n="${a.recommended}">${esc(t('mem.apply', { n: a.recommended }))}</button>`}
+  </div>`;
+}
+
 function instLaunch(e) {
   const input = (id, key, type = 'text', placeholder = '', extra = '') =>
     `<input id="${id}" class="input" type="${type}" placeholder="${esc(placeholder)}" value="${esc(e[key])}" data-bind="edit.${key}" ${extra}>`;
@@ -1159,6 +1182,7 @@ function instLaunch(e) {
       <input id="mem" type="range" min="1" max="16" step="1" value="${e.memoryGb}" data-bind="edit.memoryGb" data-number>
       <div class="row between small muted"><span>1 ${esc(t('unit.gb'))}</span><span>8 ${esc(t('unit.gb'))}</span><span>16 ${esc(t('unit.gb'))}</span></div>
       <p class="note">${esc(t('is.memoryNote'))}</p>
+      ${memAdviceHtml(e)}
     </section>
 
     <div class="grid grid-2">
@@ -1654,6 +1678,10 @@ function setGeneral(s) {
           ${Object.entries(LANGS).map(([code, dict]) => `<option value="${code}" ${code === s.language ? 'selected' : ''}>${esc(dict['lang.name'])}</option>`).join('')}
         </select>
         ${switchRow('toggleSetting', 'checkUpdates', s.checkUpdates, t('set.checkUpdates'))}
+        <div class="row between" style="gap:12px;padding-top:6px">
+          <span class="stack" style="gap:2px"><span>${esc(t('tour.again'))}</span><span class="small muted">${esc(t('tour.againSub'))}</span></span>
+          <button class="btn" data-action="startTour">${esc(t('tour.againBtn'))}</button>
+        </div>
       </section>
       <section class="panel pad stack">
         <h2 class="h2">${esc(t('set.apis'))}</h2>
@@ -2199,7 +2227,8 @@ function constellationHtml(list) {
 
 // ---------- Энциклопедия ----------
 
-const wikiBase = () => (document.documentElement.lang === 'ru' ? 'https://ru.minecraft.wiki' : 'https://minecraft.wiki');
+const WIKI_LANGS = new Set(['ru', 'uk', 'de', 'es', 'ja', 'zh', 'pt']);
+const wikiBase = () => (WIKI_LANGS.has(getLang()) ? `https://${getLang()}.minecraft.wiki` : 'https://minecraft.wiki');
 let wikiTimer;
 let wikiSeq = 0;
 
@@ -4139,6 +4168,21 @@ const actions = {
     state.settings[d.key] = state.settings[d.key] === false;
     applySettings(); render(); saveSettings();
   },
+  adviseMemory: async () => {
+    const id = state.edit?.id; if (!id) return;
+    state.memAdvice = { id, loading: true }; render();
+    try { state.memAdvice = { id, data: await api.memoryAdvice(id) }; } catch (e) { state.memAdvice = null; toast(t('error.generic', { message: e }), true); }
+    render();
+  },
+  applyMemory: async (d) => {
+    const n = Number(d.n); if (!state.edit) return;
+    state.edit.memoryGb = n;
+    const inst = state.instances.find((i) => i.id === state.edit.id);
+    if (inst) { try { await api.updateInstance({ ...inst, memoryGb: n }); await loadInstances(); } catch (e) { toast(t('error.generic', { message: e }), true); } }
+    toast(t('mem.applied', { n }));
+    render();
+  },
+  startTour: () => runTour(),
   toggleDownloads: () => toggleDownloads(),
   clearDownloads: () => clearDownloads(),
   setSpeed: (d) => { state.settings.downloadSpeed = d.v; render(); saveSettings(); },
@@ -4297,7 +4341,7 @@ onFileDrop(async (p) => {
     state.mods.dragging = false;
     try {
       const n = await api.addMods(state.edit.id, p.paths || []);
-      toast(t('mods.added', { n }));
+      toast(t('mods.addedN', { n }));
       await loadMods(state.edit.id);
     } catch (e) { toast(t('error.generic', { message: e }), true); }
     renderOverlay();
@@ -4337,6 +4381,41 @@ document.addEventListener('keydown', (ev) => {
 
 const startedAt = performance.now();
 
+const TOUR_STEPS = [
+  { target: null, title: 'tour.welcome', text: 'tour.welcomeText', lang: true },
+  { target: '#sidebar', title: 'tour.instances', text: 'tour.instancesText' },
+  { target: '.hero .play', title: 'tour.play', text: 'tour.playText' },
+  { target: '.rail-btn[data-view="resources"]', title: 'tour.catalog', text: 'tour.catalogText' },
+  { target: '#dlbtn', title: 'tour.downloads', text: 'tour.downloadsText' },
+  { target: '.searchbox', title: 'tour.search', text: 'tour.searchText' },
+  { target: '.rail-face', title: 'tour.profile', text: 'tour.profileText' },
+  { target: '.rail-btn[data-view="settings"]', title: 'tour.settings', text: 'tour.settingsText' },
+  { target: null, title: 'tour.done', text: 'tour.doneText' },
+];
+
+function runTour() {
+  state.dialog = null; renderOverlay();
+  if (state.view !== 'home') { state.view = 'home'; render(); }
+  startTour({
+    steps: TOUR_STEPS, t, esc, langs: LANGS,
+    lang: () => state.settings.language,
+    onLang: (code) => { state.settings.language = code; applySettings(); render(); saveSettings(); },
+    onDone: () => { if (!state.settings.tourDone) { state.settings.tourDone = true; saveSettings(); } },
+  });
+}
+
+/** Самый первый запуск: подбираем язык по языку системы */
+function firstRunLanguage() {
+  if (state.settings.tourDone || state.instances.length || state.accounts?.accounts?.length) return;
+  for (const l of navigator.languages || [navigator.language]) {
+    const code = String(l || '').toLowerCase().split('-')[0];
+    if (LANGS[code]) {
+      if (code !== state.settings.language) { state.settings.language = code; applySettings(); saveSettings(); }
+      return;
+    }
+  }
+}
+
 async function init() {
   try {
     state.settings = await api.getSettings();
@@ -4344,15 +4423,17 @@ async function init() {
     state.settings = { theme: 'sakura', language: 'ru', reduceMotion: false, hideOnLaunch: true, checkUpdates: true, autoJava: true, curseforgeKey: '' };
   }
   applySettings();
-  initDownloads({ t, esc, nameOf: (id) => state.instances.find((i) => i.id === id)?.name, mode: () => state.settings.downloadSpeed, lang: () => state.settings.language });
+  initDownloads({ t, esc, nameOf: (id) => state.instances.find((i) => i.id === id)?.name, mode: () => state.settings.downloadSpeed });
   subscribe();
   try { await loadInstances(); } catch (e) { toast(t('error.generic', { message: e }), true); }
   try { state.dataDir = await api.dataDir(); } catch { /* без обложек тоже можно */ }
   try { state.accounts = await api.listAccounts(); } catch { /* без аккаунтов тоже можно жить */ }
   try { state.running = new Set(await api.runningInstances()); } catch { /* ничего */ }
   try { state.msReady = await api.microsoftReady(); } catch { /* старый бэкенд */ }
+  firstRunLanguage();
   loadFaces();
   setTimeout(checkAchievements, 2000);
+  if (!state.settings.tourDone) setTimeout(() => { if (!state.dialog) runTour(); }, 1500);
   if (state.settings.menuMusic) startMenuMusic();
   render();
   if (state.settings.checkUpdates) {

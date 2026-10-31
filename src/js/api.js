@@ -73,6 +73,7 @@ export const api = {
   deleteProfile: (id, name) => call('delete_profile', { id, name }),
   applyProfile: (id, name) => call('apply_profile', { id, name }),
   precheck: (id) => call('precheck', { id }),
+  memoryAdvice: (id) => call('memory_advice', { id }),
 
   findPrism: () => call('find_prism_instances'),
   importPrism: (paths) => call('import_prism', { paths }),
@@ -287,16 +288,18 @@ async function mockInvoke(cmd, args = {}) {
     }
     case 'delete_profile': { const list = store.get('prof-' + args.id, []).filter((x) => x.name !== args.name); store.set('prof-' + args.id, list); return list; }
     case 'apply_profile': await sleep(200); return 2;
+    case 'memory_advice': await sleep(300); return { mods: 140, shaders: true, systemGb: 16, recommended: 7, cap: 8, limited: false };
     case 'precheck': return new URLSearchParams(location.search).has('precheck') ? [{ kind: 'wrongLoader', name: 'Create', detail: 'forge' }, { kind: 'memory', name: '140', detail: '6' }] : [];
     case 'stats_sessions': {
       const now = Date.now() / 1000; const day = 86400;
+      const names = Object.fromEntries(store.get('instances', []).map((i) => [i.id, i.name]));
       return [
         { instance: 'a1', name: 'Уютная ферма', gameVersion: '1.20.1', loader: 'forge', start: now - day * 6, seconds: 5400 },
         { instance: 'a1', name: 'Уютная ферма', gameVersion: '1.20.1', loader: 'forge', start: now - day * 4, seconds: 2700 },
         { instance: 'a2', name: 'Страшилки', gameVersion: '1.20.1', loader: 'forge', start: now - day * 2, seconds: 3600 },
         { instance: 'a1', name: 'Уютная ферма', gameVersion: '1.20.1', loader: 'forge', start: now - day * 1, seconds: 7200 },
         { instance: 'a4', name: 'Ванилла', gameVersion: '26.3', loader: 'vanilla', start: now - 3600, seconds: 1800 },
-      ];
+      ].map((x) => ({ ...x, name: names[x.instance] || x.name }));
     }
     case 'find_prism_accounts': await sleep(200); return [
       { id: 'prism-mari', name: 'MariPlays', fresh: true, expiresAt: Date.now() / 1000 + 50000 },

@@ -6,8 +6,10 @@
 
 <p align="center">
   Красивый и лёгкий лаунчер для Minecraft: Java Edition.<br>
-  Десять тем и свои темы, сборки с модами, поиск по Modrinth, скины и перенос из Prism.
+  13 тем и свои темы, сборки с модами, поиск по Modrinth, скины, перенос из Prism и 11 языков.
 </p>
+
+<p align="center"><a href="https://bunnykrojink.github.io/spectia/"><b>bunnykrojink.github.io/spectia</b></a></p>
 
 <p align="center"><b>Русский</b> · <a href="#english">English</a></p>
 
@@ -15,8 +17,8 @@
 
 ## Что уже умеет
 
-- [x] Десять тем (Ночь, Изумруд, Сакура, Рубин, Аметист, Космос, Океан, Хэллоуин, Светлая, Полночь) и редактор своих тем
-- [x] Русский и английский язык интерфейса
+- [x] 13 тем и редактор своих тем
+- [x] 11 языков: русский, English, українська, español, Deutsch, қазақша, 中文, 日本語, português, lietuvių, latviešu
 - [x] Создание сборок: версия Minecraft прямо с серверов Mojang, загрузчик Fabric / Forge / NeoForge / Quilt
 - [x] Настройки каждой сборки: память, Java, окно, автовход на сервер и раздел «Для продвинутых»
 - [x] Поиск модов, шейдеров, текстурпаков, датапаков и сборок на Modrinth
@@ -51,13 +53,15 @@
 - [x] Лицо скина, достижения, Spectia Wrapped
 - [x] Откат модов, машина времени, профили модов, сравнение сборок, Doctor 2
 - [x] Достижения 2.0 с книгой, энциклопедия, статистика, созвездие, аксолотль, живые обои
+- [x] Загрузки как в Steam: график скорости, режимы скорости, повторное использование Java
+- [x] Знакомство с лаунчером, умная память, сайт
 - [ ] CurseForge в каталоге (ждём ключ API)
 
 Что планируется дальше — в [ROADMAP.md](ROADMAP.md).
 
 ## Как скачать
 
-Готовый установщик для Windows лежит во вкладке **Releases**. Начиная с версии 0.2.0, Spectia обновляется сама.
+Установщик для Windows — на [сайте Spectia](https://bunnykrojink.github.io/spectia/) или во вкладке **Releases**. Дальше Spectia обновляется сама.
 
 ## Для разработчиков
 
@@ -73,7 +77,10 @@ src/                 интерфейс
   js/doctor.js       Spectia Doctor: разбор логов
   js/achievements.js достижения и Spectia Wrapped
   js/pet.js          аксолотль и аквариум
-  i18n/ru.js, en.js  переводы
+  js/downloads.js    окно загрузок
+  js/tour.js         знакомство с лаунчером
+  i18n/*.js          переводы (11 языков)
+docs/                сайт на GitHub Pages
 src-tauri/           Rust-часть
   src/instances.rs   сборки
   src/settings.rs    настройки
@@ -131,7 +138,7 @@ Spectia не является официальным продуктом Minecraf
 
 ## English
 
-Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. Ten themes plus a custom theme editor, background pictures and accent colors; Russian and English UI; instances with favorites, folders, tags, archive and notes; Modrinth search and one-click installs (mods, shaders, resource packs, datapacks into a chosen world, modpacks); Ely.by and Microsoft sign-in (Microsoft pending Mojang approval); skin preview, collection and capes; moving instances from Prism Launcher; world backups; vanilla, Fabric, Quilt, Forge and NeoForge with automatic Java; .mrpack export/import and self-updates. See ROADMAP.md for what's next.
+Spectia is a beautiful, lightweight launcher for Minecraft: Java Edition, built with Tauri 2. Website: https://bunnykrojink.github.io/spectia/. 13 themes plus a custom theme editor, background pictures and accent colors; the UI in 11 languages; instances with favorites, folders, tags, archive and notes; Modrinth search and one-click installs (mods, shaders, resource packs, datapacks into a chosen world, modpacks); Ely.by sign-in or a licensed account through Prism Launcher; Spectia Doctor, a time machine and mod history with undo; a Steam-like downloads panel; skin preview, collection and capes; moving instances from Prism Launcher; world backups; vanilla, Fabric, Quilt, Forge and NeoForge with automatic Java; .mrpack export/import and self-updates. See ROADMAP.md for what's next.
 
 Build: install Rust and Node.js, then run `npm install` and `npm run build`. For Microsoft sign-in, set the `SPECTIA_MS_CLIENT_ID` environment variable to your Azure app's client ID at build time.
 

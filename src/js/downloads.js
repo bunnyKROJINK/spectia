@@ -210,7 +210,7 @@ function panelHtml() {
         <span class="dl-check" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 6.3 5 8.6l4.6-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         <span class="grow dl-name">${esc(h.name)}</span>
         <span class="small muted">${esc(t('dl.took', { size: formatSize(h.bytes), time: formatTime(h.seconds) }))}</span>
-        <span class="small muted">${esc(new Date(h.at).toLocaleTimeString(ctx.lang?.() === 'en' ? 'en-GB' : 'ru-RU', { hour: '2-digit', minute: '2-digit' }))}</span>
+        <span class="small muted">${esc(new Date(h.at).toLocaleTimeString(document.documentElement.lang, { hour: '2-digit', minute: '2-digit' }))}</span>
       </li>`).join('')}</ul>` : `<span class="small muted">${esc(t('dl.todayEmpty'))}</span>`}`;
 }
 

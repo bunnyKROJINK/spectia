@@ -1,3 +1,4 @@
+import { t } from './i18n.js';
 // Аксолотль в уголке лаунчера и аквариум на главной.
 // Рисунки свои (не из Minecraft): пиксельные, в духе игры.
 
@@ -62,7 +63,7 @@ export function setPet(on, { running = false } = {}) {
   if (!el) {
     el = document.getElementById('pet');
     if (!el) return;
-    el.innerHTML = `<button class="pet-body" type="button" aria-label="Аксолотль">${axolotlSvg}</button><span class="pet-fx" aria-hidden="true"></span>`;
+    el.innerHTML = `<button class="pet-body" type="button" aria-label="${t('pet.label')}">${axolotlSvg}</button><span class="pet-fx" aria-hidden="true"></span>`;
     el.querySelector('.pet-body').addEventListener('click', () => {
       el.classList.remove('spin');
       void el.offsetWidth;
