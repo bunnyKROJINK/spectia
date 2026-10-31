@@ -48,9 +48,12 @@ pub struct VersionJson {
     pub java_version: Option<JavaVersion>,
     #[serde(default)]
     pub logging: Option<Logging>,
-    /// Для загрузчиков модов (Fabric и др.) — версия, на которой они основаны. Пригодится в 0.3.
+    /// Для загрузчиков модов — версия Minecraft, на которой они основаны.
     #[serde(default)]
     pub inherits_from: Option<String>,
+    /// Чей client.jar использовать (у загрузчиков — от исходной версии игры)
+    #[serde(default)]
+    pub jar: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -120,6 +123,10 @@ pub struct Library {
     /// У библиотек загрузчиков модов вместо downloads бывает адрес maven-репозитория
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default)]
+    pub sha1: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -227,6 +234,61 @@ struct ManifestEntry {
     sha1: Option<String>,
 }
 
+/// Описание версии вместе с «родителем»: для Fabric/Forge это их собственный файл,
+/// соединённый с описанием обычной версии Minecraft.
+pub async fn load_merged(data: &Path, id: &str) -> Result<VersionJson, String> {
+    let child = load_version(data, id).await?;
+    match child.inherits_from.clone() {
+        Some(parent_id) if parent_id != child.id => {
+            let parent = load_version(data, &parent_id).await?;
+            Ok(merge(parent, child))
+        }
+        _ => Ok(child),
+    }
+}
+
+/// Ключ библиотеки без версии: "group:artifact[:classifier]" — чтобы новая версия заменяла старую.
+fn lib_key(name: &str) -> String {
+    let coords = name.split('@').next().unwrap_or(name);
+    let p: Vec<&str> = coords.split(':').collect();
+    match p.len() {
+        0..=2 => coords.to_string(),
+        3 => format!("{}:{}", p[0], p[1]),
+        _ => format!("{}:{}:{}", p[0], p[1], p[3]),
+    }
+}
+
+fn merge(parent: VersionJson, child: VersionJson) -> VersionJson {
+    let mut libraries = child.libraries.clone();
+    let child_keys: std::collections::HashSet<String> = child.libraries.iter().map(|l| lib_key(&l.name)).collect();
+    libraries.extend(parent.libraries.iter().filter(|l| !child_keys.contains(&lib_key(&l.name))).cloned());
+
+    let arguments = match (&parent.arguments, &child.arguments) {
+        (Some(p), Some(c)) => Some(Arguments {
+            game: p.game.iter().chain(c.game.iter()).cloned().collect(),
+            jvm: p.jvm.iter().chain(c.jvm.iter()).cloned().collect(),
+        }),
+        (Some(p), None) => Some(p.clone()),
+        (None, c) => c.clone(),
+    };
+
+    VersionJson {
+        id: child.id,
+        kind: parent.kind,
+        main_class: child.main_class,
+        arguments,
+        minecraft_arguments: child.minecraft_arguments.or(parent.minecraft_arguments),
+        asset_index: child.asset_index.or(parent.asset_index),
+        assets: child.assets.or(parent.assets),
+        downloads: parent.downloads,
+        libraries,
+        java_version: child.java_version.or(parent.java_version),
+        logging: parent.logging,
+        inherits_from: None,
+        jar: Some(child.jar.or(parent.jar).unwrap_or(parent.id)),
+    }
+}
+
 /// Скачивает (или берёт из кэша) описание версии.
 pub async fn load_version(data: &Path, id: &str) -> Result<VersionJson, String> {
     let file = data.join("versions").join(id).join(format!("{id}.json"));
@@ -321,7 +383,7 @@ pub async fn prepare(data: &Path, game_dir: &Path, v: &VersionJson, progress: &P
                 if let Some(rel) = maven_path(&lib.name) {
                     let base = lib.url.clone().unwrap_or_else(|| LIBRARIES_URL.to_string());
                     let path = libraries_dir.join(&rel);
-                    jobs.push(Job { url: format!("{}/{}", base.trim_end_matches('/'), rel), path: path.clone(), sha1: None, size: None });
+                    jobs.push(Job { url: format!("{}/{}", base.trim_end_matches('/'), rel), path: path.clone(), sha1: lib.sha1.clone(), size: lib.size });
                     classpath.push(path);
                 }
             }
@@ -345,7 +407,8 @@ pub async fn prepare(data: &Path, game_dir: &Path, v: &VersionJson, progress: &P
     let mut seen = std::collections::HashSet::new();
     classpath.retain(|p| seen.insert(p.clone()));
 
-    let client_jar = data.join("versions").join(&v.id).join(format!("{}.jar", v.id));
+    let jar_id = v.jar.clone().unwrap_or_else(|| v.id.clone());
+    let client_jar = data.join("versions").join(&jar_id).join(format!("{jar_id}.jar"));
     if let Some(c) = v.downloads.as_ref().and_then(|d| d.client.clone()) {
         jobs.push(Job { url: c.url, path: client_jar.clone(), sha1: c.sha1, size: c.size });
     }
@@ -520,6 +583,12 @@ mod tests {
             maven_path("org.lwjgl:lwjgl:3.3.3:natives-windows").unwrap(),
             "org/lwjgl/lwjgl/3.3.3/lwjgl-3.3.3-natives-windows.jar"
         );
+    }
+
+    #[test]
+    fn keys() {
+        assert_eq!(lib_key("org.ow2.asm:asm:9.6"), "org.ow2.asm:asm");
+        assert_eq!(lib_key("org.lwjgl:lwjgl:3.3.3:natives-windows"), "org.lwjgl:lwjgl:natives-windows");
     }
 
     #[test]

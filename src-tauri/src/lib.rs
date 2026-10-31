@@ -8,6 +8,8 @@ mod game;
 mod instances;
 mod java;
 mod launch;
+mod loaders;
+mod mods;
 mod net;
 mod paths;
 mod settings;
@@ -28,6 +30,12 @@ pub fn run() {
             instances::update_instance,
             instances::delete_instance,
             instances::open_instance_folder,
+            instances::duplicate_instance,
+            loaders::get_loader_versions,
+            mods::list_mods,
+            mods::toggle_mod,
+            mods::delete_mod,
+            mods::add_mods,
             accounts::list_accounts,
             accounts::add_ely_account,
             accounts::set_active_account,

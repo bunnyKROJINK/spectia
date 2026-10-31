@@ -22,6 +22,8 @@ pub struct Instance {
     pub game_version: String,
     /// "vanilla", "fabric", "forge", "neoforge" или "quilt"
     pub loader: String,
+    /// Версия загрузчика. Пусто = рекомендуемая (определится при первом запуске)
+    pub loader_version: String,
     /// Номер цвета обложки (0–5)
     pub tint: u8,
     /// Память в гигабайтах
@@ -39,6 +41,10 @@ pub struct Instance {
     pub env_vars: String,
     pub show_console: bool,
     pub created_at: u64,
+    /// Сколько секунд наиграно в этой сборке
+    pub play_time_secs: u64,
+    /// Когда запускали последний раз (секунды с 1970 года)
+    pub last_played: u64,
 }
 
 impl Default for Instance {
@@ -48,6 +54,7 @@ impl Default for Instance {
             name: String::new(),
             game_version: String::new(),
             loader: "vanilla".into(),
+            loader_version: String::new(),
             tint: 0,
             memory_gb: 4,
             java_path: String::new(),
@@ -62,6 +69,8 @@ impl Default for Instance {
             env_vars: String::new(),
             show_console: false,
             created_at: 0,
+            play_time_secs: 0,
+            last_played: 0,
         }
     }
 }
@@ -72,6 +81,8 @@ pub struct NewInstance {
     pub name: String,
     pub game_version: String,
     pub loader: String,
+    #[serde(default)]
+    pub loader_version: String,
     pub tint: u8,
 }
 
@@ -164,6 +175,7 @@ pub fn create_instance(app: AppHandle, data: NewInstance) -> Result<Instance, St
         name: name.to_string(),
         game_version: data.game_version,
         loader: data.loader,
+        loader_version: data.loader_version,
         tint: data.tint.min(5),
         created_at: now(),
         ..Instance::default()
@@ -180,8 +192,68 @@ pub fn update_instance(app: AppHandle, instance: Instance) -> Result<Instance, S
     }
     let mut inst = instance;
     inst.memory_gb = inst.memory_gb.clamp(1, 32);
+    // Время в игре считает только лаунчер — берём его из сохранённой версии
+    if let Ok(old) = read(&app, &inst.id) {
+        inst.play_time_secs = old.play_time_secs;
+        inst.last_played = old.last_played;
+        inst.created_at = old.created_at;
+    }
     write_instance(&dir, &inst)?;
     Ok(inst)
+}
+
+/// Делает копию сборки со всеми модами, мирами и настройками.
+#[tauri::command]
+pub fn duplicate_instance(app: AppHandle, id: String, name: String) -> Result<Instance, String> {
+    let src = dir(&app, &id)?;
+    let mut inst = read(&app, &id)?;
+    let name = name.trim();
+    inst.name = if name.is_empty() { format!("{} (копия)", inst.name) } else { name.to_string() };
+    inst.id = format!("{}-{}", slugify(&inst.name), now());
+    inst.created_at = now();
+    inst.play_time_secs = 0;
+    inst.last_played = 0;
+    let dst = instance_path(&app, &inst.id)?;
+    copy_dir(&src, &dst).map_err(|e| format!("не получилось скопировать сборку: {e}"))?;
+    // Лог прошлых запусков копировать не нужно
+    let _ = std::fs::remove_file(dst.join("launcher.log"));
+    write_instance(&dst, &inst)?;
+    Ok(inst)
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Добавляет время игры (вызывается, когда игра закрылась).
+pub fn add_play_time(app: &AppHandle, id: &str, secs: u64) {
+    if let Ok(mut inst) = read(app, id) {
+        inst.play_time_secs += secs;
+        inst.last_played = now();
+        if let Ok(d) = dir(app, id) {
+            let _ = write_instance(&d, &inst);
+        }
+    }
+}
+
+/// Запоминает выбранную версию загрузчика (когда она была «рекомендуемой»).
+pub fn set_loader_version(app: &AppHandle, id: &str, version: &str) {
+    if let Ok(mut inst) = read(app, id) {
+        inst.loader_version = version.to_string();
+        if let Ok(d) = dir(app, id) {
+            let _ = write_instance(&d, &inst);
+        }
+    }
 }
 
 #[tauri::command]

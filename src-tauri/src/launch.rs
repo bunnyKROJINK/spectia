@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::{accounts, game, instances, java, net, paths, settings};
+use crate::{accounts, game, instances, java, loaders, net, paths, settings};
 
 const AUTHLIB_INJECTOR_URL: &str = "https://authlib-injector.yushi.moe/artifact/latest.json";
 
@@ -63,10 +63,7 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
     let progress = Progress { app: Some(app.clone()), instance: id.clone() };
     progress.stage("account", 0, 1);
 
-    let inst = instances::read(&app, &id)?;
-    if inst.loader != "vanilla" {
-        return Err("LOADER_NOT_YET".into());
-    }
+    let mut inst = instances::read(&app, &id)?;
     let settings = settings::load(&app);
     let account = accounts::active_for_launch(&app).await?;
 
@@ -76,16 +73,29 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
     std::fs::create_dir_all(&game_dir).map_err(|e| e.to_string())?;
 
     progress.stage("version", 0, 1);
-    let version = game::load_version(&data, &inst.game_version).await?;
+    let vanilla = game::load_version(&data, &inst.game_version).await?;
 
     // Java: своя из настроек сборки → скачанная лаунчером → системная
     let java_path = if !inst.java_path.trim().is_empty() {
         PathBuf::from(inst.java_path.trim())
     } else if settings.auto_java {
-        let component = version.java_version.as_ref().map(|j| j.component.clone()).unwrap_or_else(|| "jre-legacy".into());
+        let component = vanilla.java_version.as_ref().map(|j| j.component.clone()).unwrap_or_else(|| "jre-legacy".into());
         java::ensure(&data, &component, &progress).await?
     } else {
         PathBuf::from(if cfg!(windows) { "javaw" } else { "java" })
+    };
+
+    // Загрузчик модов
+    let version = if inst.loader == "vanilla" {
+        vanilla
+    } else {
+        if inst.loader_version.is_empty() {
+            inst.loader_version = loaders::recommended(&inst.loader, &inst.game_version).await?;
+            instances::set_loader_version(&app, &id, &inst.loader_version);
+        }
+        let java_for_installer = console_java(&java_path);
+        let version_id = loaders::install(&data, &inst.loader, &inst.game_version, &inst.loader_version, &java_for_installer, &progress).await?;
+        game::load_merged(&data, &version_id).await?
     };
 
     let prepared = game::prepare(&data, &game_dir, &version, &progress).await?;
@@ -166,6 +176,7 @@ pub async fn launch_instance(app: AppHandle, running: State<'_, Running>, id: St
         if let Ok(mut map) = app.state::<Running>().0.lock() {
             map.remove(&id);
         }
+        instances::add_play_time(&app, &id, started.elapsed().as_secs());
         if !post.trim().is_empty() {
             let _ = shell(&post, &game_dir, &inst_env, &env).status();
         }
@@ -279,6 +290,17 @@ fn build_args(c: &Ctx) -> Vec<String> {
 }
 
 
+/// Для установщиков нужен java.exe (у javaw.exe нет вывода, и по ошибкам ничего не понять).
+fn console_java(java: &Path) -> PathBuf {
+    if java.file_name().map(|n| n == "javaw.exe").unwrap_or(false) {
+        let alt = java.with_file_name("java.exe");
+        if alt.exists() {
+            return alt;
+        }
+    }
+    java.to_path_buf()
+}
+
 /// authlib-injector — маленькая программа, которая направляет игру на серверы Ely.by
 /// (для входа и скинов). Рекомендована самим Ely.by.
 async fn ensure_authlib_injector(data: &Path) -> Result<PathBuf, String> {
@@ -391,29 +413,34 @@ mod tests {
         assert_eq!(parse_env("A=1; B = two\nbad"), vec![("A".into(), "1".into()), ("B".into(), "two".into())]);
     }
 
-    /// Настоящая проверка от начала до конца: скачивает версию игры и Java,
-    /// собирает команду запуска и запускает Minecraft на ~40 секунд.
-    /// Тяжёлая (качает сотни мегабайт), поэтому запускается только на GitHub:
-    ///   cargo test -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn vanilla_end_to_end() {
-        let version_id = std::env::var("SPECTIA_IT_VERSION").unwrap_or_else(|_| "26.3".into());
+    /// Настоящая проверка от начала до конца: скачивает игру, Java и загрузчик,
+    /// собирает команду запуска и запускает Minecraft. Тяжёлая (качает гигабайты),
+    /// поэтому запускается только на GitHub:  cargo test -- --ignored --test-threads=1
+    fn e2e(game_version: &str, loader: &str) {
         let data = std::env::temp_dir().join("spectia-it");
-        let game_dir = data.join("game");
+        let game_dir = data.join(format!("game-{loader}-{game_version}"));
         std::fs::create_dir_all(&game_dir).unwrap();
+        println!("===== {loader} {game_version} =====");
 
         let (java_path, args) = tauri::async_runtime::block_on(async {
             let progress = Progress::silent();
-            let version = game::load_version(&data, &version_id).await.expect("описание версии");
-            let component = version.java_version.as_ref().map(|j| j.component.clone()).unwrap_or_else(|| "jre-legacy".into());
+            let vanilla = game::load_version(&data, game_version).await.expect("описание версии");
+            let component = vanilla.java_version.as_ref().map(|j| j.component.clone()).unwrap_or_else(|| "jre-legacy".into());
             let java = java::ensure(&data, &component, &progress).await.expect("Java");
+            let version = if loader == "vanilla" {
+                vanilla
+            } else {
+                let lv = loaders::recommended(loader, game_version).await.expect("версия загрузчика");
+                println!("{loader} {lv}");
+                let id = loaders::install(&data, loader, game_version, &lv, &java, &progress).await.expect("установка загрузчика");
+                game::load_merged(&data, &id).await.expect("описание версии с загрузчиком")
+            };
             let prepared = game::prepare(&data, &game_dir, &version, &progress).await.expect("файлы игры");
             println!("Java: {}  библиотек: {}", java.display(), prepared.classpath.len());
             for p in &prepared.classpath {
                 assert!(p.exists(), "нет файла {}", p.display());
             }
-            let inst = instances::Instance { memory_gb: 2, ..Default::default() };
+            let inst = instances::Instance { memory_gb: 3, ..Default::default() };
             let account = accounts::Account {
                 id: "8667ba71b85a4004af54457a9734eed7".into(),
                 name: "SpectiaTest".into(),
@@ -433,8 +460,7 @@ mod tests {
         });
         assert!(!args.iter().any(|a| a.contains("${")), "остались неподставленные переменные: {args:?}");
 
-        // На Windows для проверки берём java.exe (у javaw нет вывода в консоль — но мы и так пишем в файл)
-        let log_path = data.join("it.log");
+        let log_path = data.join(format!("it-{loader}-{game_version}.log"));
         let log = std::fs::File::create(&log_path).unwrap();
         let mut child = Command::new(&java_path)
             .args(&args)
@@ -444,14 +470,23 @@ mod tests {
             .spawn()
             .expect("запуск Java");
 
+        // Признаки того, что игра (и загрузчик) по-настоящему стартовали
+        let markers = [
+            "Setting user: SpectiaTest",
+            "Backend library: LWJGL",
+            "with Fabric Loader",
+            "with Quilt Loader",
+            "ModLauncher running",
+            "Launching target",
+        ];
         let started = Instant::now();
-        let mut found = false;
-        while started.elapsed() < Duration::from_secs(90) {
+        let mut found = None;
+        while started.elapsed() < Duration::from_secs(120) {
             std::thread::sleep(Duration::from_secs(2));
             let text = std::fs::read_to_string(&log_path).unwrap_or_default();
-            if text.contains("Setting user: SpectiaTest") || text.contains("Backend library: LWJGL") {
-                found = true;
-                std::thread::sleep(Duration::from_secs(5));
+            if let Some(m) = markers.iter().find(|m| text.contains(*m)) {
+                found = Some(*m);
+                std::thread::sleep(Duration::from_secs(8));
                 break;
             }
             if let Ok(Some(_)) = child.try_wait() {
@@ -459,7 +494,38 @@ mod tests {
             }
         }
         let _ = child.kill();
-        println!("----- лог игры -----\n{}", log_tail(&log_path, 80));
-        assert!(found, "Minecraft не дошёл до запуска, смотрите лог выше");
+        println!("----- лог игры ({loader} {game_version}) -----\n{}", log_tail(&log_path, 60));
+        println!("Признак запуска: {found:?}");
+        assert!(found.is_some(), "Minecraft не дошёл до запуска, смотрите лог выше");
+    }
+
+    #[test]
+    #[ignore]
+    fn vanilla_end_to_end() {
+        e2e("26.3", "vanilla");
+    }
+
+    #[test]
+    #[ignore]
+    fn fabric_end_to_end() {
+        e2e("26.3", "fabric");
+    }
+
+    #[test]
+    #[ignore]
+    fn neoforge_end_to_end() {
+        e2e("26.3", "neoforge");
+    }
+
+    #[test]
+    #[ignore]
+    fn forge_end_to_end() {
+        e2e("1.20.1", "forge");
+    }
+
+    #[test]
+    #[ignore]
+    fn forge_legacy_end_to_end() {
+        e2e("1.12.2", "forge");
     }
 }
