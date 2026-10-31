@@ -51,6 +51,18 @@ export const api = {
   exportTheme: (name, json) => call('export_theme', { name, json }),
   notify: (title, body) => call('notify', { title, body }),
   statsSummary: () => call('stats_summary'),
+  statsSessions: () => call('stats_sessions'),
+  findPrismAccounts: () => call('find_prism_accounts'),
+  addPrismAccount: (id) => call('add_prism_account', { id }),
+  modHistory: (id) => call('mod_history', { id }),
+  removeProject: (id, projectId) => call('remove_project', { id, projectId }),
+  checkDependencies: (id) => call('check_dependencies', { id }),
+  listMusic: () => call('list_music'),
+  minecraftNews: () => call('minecraft_news'),
+  patchNoteBody: (contentPath) => call('patch_note_body', { contentPath }),
+  gameLogs: (id) => call('game_logs', { id }),
+  setMini: (on) => call('set_mini', { on }),
+  importPack: (path) => call('import_pack', { path: path || null }),
 
   findPrism: () => call('find_prism_instances'),
   importPrism: (paths) => call('import_prism', { paths }),
@@ -247,6 +259,58 @@ async function mockInvoke(cmd, args = {}) {
     case 'export_theme': return 'C:\\Users\\Мари\\Desktop\\' + args.name + '.spectia-theme.json';
     case 'notify': return null;
     case 'stats_summary': return { sessions: 0, totalSeconds: 0 };
+    case 'stats_sessions': {
+      const now = Date.now() / 1000; const day = 86400;
+      return [
+        { instance: 'a1', name: 'Уютная ферма', gameVersion: '1.20.1', loader: 'forge', start: now - day * 6, seconds: 5400 },
+        { instance: 'a1', name: 'Уютная ферма', gameVersion: '1.20.1', loader: 'forge', start: now - day * 4, seconds: 2700 },
+        { instance: 'a2', name: 'Страшилки', gameVersion: '1.20.1', loader: 'forge', start: now - day * 2, seconds: 3600 },
+        { instance: 'a1', name: 'Уютная ферма', gameVersion: '1.20.1', loader: 'forge', start: now - day * 1, seconds: 7200 },
+        { instance: 'a4', name: 'Ванилла', gameVersion: '26.3', loader: 'vanilla', start: now - 3600, seconds: 1800 },
+      ];
+    }
+    case 'find_prism_accounts': await sleep(200); return [
+      { id: 'prism-mari', name: 'MariPlays', fresh: true, expiresAt: Date.now() / 1000 + 50000 },
+      { id: 'prism-old', name: 'OldNick', fresh: false, expiresAt: Date.now() / 1000 - 5000 },
+    ];
+    case 'add_prism_account': {
+      const s = store.get('accounts', { active: '', accounts: [] });
+      const name = args.id === 'prism-mari' ? 'MariPlays' : 'OldNick';
+      s.accounts = s.accounts.filter((a) => a.id !== args.id).concat({ id: args.id, name, kind: 'prism' });
+      s.active = args.id; store.set('accounts', s);
+      return accountInfo();
+    }
+    case 'mod_history': return [
+      { time: Date.now() / 1000 - 600, action: 'installed', name: 'Iris Shaders', detail: 'mods/iris-1.9.jar' },
+      { time: Date.now() / 1000 - 3600 * 5, action: 'updated', name: 'Sodium', detail: '0.6.9 → 0.7.0' },
+      { time: Date.now() / 1000 - 86400 * 2, action: 'disabled', name: 'Iris', detail: 'iris-1.9.jar.disabled' },
+      { time: Date.now() / 1000 - 86400 * 3, action: 'appeared', name: 'farmersdelight', detail: 'farmersdelight.jar' },
+    ];
+    case 'remove_project': await sleep(200); return ['Мод'];
+    case 'check_dependencies': await sleep(400); return [
+      { kind: 'missing', projectId: 'P7dR8mSH', title: 'Fabric API', neededBy: ['Sodium', 'Iris'] },
+    ];
+    case 'list_music': return [
+      { key: 'minecraft/sounds/music/menu/menu2.ogg', title: 'Moog City 2', group: 'menu', path: '' },
+      { key: 'minecraft/sounds/music/game/calm1.ogg', title: 'Minecraft', group: 'game', path: '' },
+      { key: 'minecraft/sounds/music/game/calm3.ogg', title: 'Sweden', group: 'game', path: '' },
+      { key: 'minecraft/sounds/music/game/piano2.ogg', title: 'Wet Hands', group: 'game', path: '' },
+      { key: 'minecraft/sounds/music/creative/creative4.ogg', title: 'Aria Math', group: 'creative', path: '' },
+      { key: 'minecraft/sounds/music/game/nether/nether4.ogg', title: 'Ballad of the Cats', group: 'nether', path: '' },
+      { key: 'minecraft/sounds/records/pigstep.ogg', title: 'Pigstep', group: 'records', path: '' },
+    ];
+    case 'minecraft_news': await sleep(300); return [
+      { id: 'n1', kind: 'news', title: 'Осеннее обновление уже здесь', text: 'Новые мобы, блоки и уютные леса.', date: '2026-10-28', image: '', url: 'https://www.minecraft.net', contentPath: '', version: '' },
+      { id: 'p1', kind: 'release', title: 'Minecraft Java Edition 26.3', text: 'Исправления и улучшения.', date: '2026-10-20', image: '', url: '', contentPath: 'javaPatchNotes/26.3.json', version: '26.3' },
+      { id: 'p2', kind: 'snapshot', title: 'Снапшот 26.4-snapshot-2', text: 'Пробуем новые штуки.', date: '2026-10-29', image: '', url: '', contentPath: 'javaPatchNotes/s2.json', version: '26.4-snapshot-2' },
+    ];
+    case 'patch_note_body': return '<p>Демо-текст обновления.</p><ul><li>Исправлены ошибки</li></ul>';
+    case 'game_logs': return {
+      launcher: '[12:00:01] [main/INFO]: Loading Minecraft 1.20.1\n[12:00:03] [main/WARN]: Something odd\n[12:00:05] [main/ERROR]: Mod \'Sodium\' (sodium) 0.5.8 requires version 0.15 or later of fabricloader\njava.lang.RuntimeException: demo\n\tat net.minecraft.Main.main(Main.java:1)',
+      latest: '', crash: '', crashName: '', crashTime: 0,
+    };
+    case 'set_mini': return null;
+    case 'import_pack': return null;
     case 'find_prism_instances': await sleep(300); return [
       { path: 'C:/Prism/instances/Cozy', name: 'Уютная ферма', gameVersion: '1.20.1', loader: 'forge', loaderVersion: '1.20.1-47.4.28', size: 820_000_000, source: 'Prism Launcher' },
       { path: 'C:/Prism/instances/Horror', name: 'Страшилки', gameVersion: '1.21.1', loader: 'neoforge', loaderVersion: '21.1.200', size: 410_000_000, source: 'Prism Launcher' },

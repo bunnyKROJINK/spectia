@@ -14,10 +14,11 @@ import { applyAppearance, applyZoom, resolveTheme, themeFromColors, lum as lumOf
 import { chime } from './sound.js';
 import { skinCanvas, paintSkins } from './skinview.js';
 import { icon, heroArt } from './icons.js';
-import { searchModrinth } from './modrinth.js';
+import { searchModrinth, CATEGORIES, projectDetails, trending } from './modrinth.js';
+import { diagnose, crashDescription, lineLevel } from './doctor.js';
 import { matchScore } from './search.js';
 
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.0';
 const REPO_URL = 'https://github.com/bunnyKROJINK/spectia';
 const LOADERS = ['vanilla', 'fabric', 'neoforge', 'forge', 'quilt'];
 const RES_KINDS = ['mod', 'shader', 'resourcepack', 'datapack', 'modpack'];
@@ -25,11 +26,13 @@ const NAV = [
   { id: 'home', view: 'home' },
   { id: 'instances', view: 'instances' },
   { id: 'resources', view: 'resources' },
+  { id: 'news', view: 'news' },
+  { id: 'music', view: 'music' },
   { id: 'skins', view: 'skins' },
   { id: 'settings', view: 'settings' },
 ];
 // Каким пунктом меню подсвечивать каждый экран
-const NAV_OF_VIEW = { home: 'home', instances: 'instances', create: 'instances', instance: 'instances', resources: 'resources', skins: 'skins', settings: 'settings', accounts: '' };
+const NAV_OF_VIEW = { home: 'home', instances: 'instances', create: 'instances', instance: 'instances', resources: 'resources', news: 'news', music: 'music', skins: 'skins', settings: 'settings', accounts: '' };
 
 const state = {
   view: 'home',
@@ -51,9 +54,21 @@ const state = {
   shots: { id: null, list: null },
   dataDir: '',             // папка с данными лаунчера (для картинок обложек)
   importing: null,         // { done, total } пока импортируется .mrpack
-  res: { query: '', kind: 'mod', source: 'modrinth', results: null, loading: false, error: false, targetId: null, installing: {}, installed: new Set(), installedFor: null },
+  res: { query: '', kind: 'mod', source: 'modrinth', results: null, loading: false, error: false, targetId: null, installing: {}, installed: new Set(), installedFor: null, cats: [] },
   skins: { account: null, accountFor: null, library: null, pick: null, busy: false },
   tagDraft: '',
+  // ---------- 0.6 ----------
+  modSel: new Set(),       // выбранные моды для массовых действий
+  modSort: 'name',         // name | added
+  modView: 'list',         // list | history
+  history: { id: null, list: null },
+  deps: { id: null, list: null },
+  logs: { id: null, data: null, filter: 'all', query: '', source: 'launcher' },
+  news: { list: null, error: false, trend: null, tab: 'all' },
+  music: { list: null, group: 'all', current: null, playing: false, shuffle: false },
+  mini: false,
+  palette: null,           // { query, sel } — окно Ctrl+K
+  week: null,              // сессии для графика на главной
   instFilter: 'all',       // all | fav | archive | folder:… | tag:…
   msReady: false,          // настроен ли вход через Microsoft в этой сборке лаунчера
   msBusy: false,
@@ -143,6 +158,7 @@ function applySettings() {
   const theme = applyAppearance(state.settings);
   renderDecorations(theme.deco, state.settings.showDecorations !== false);
   document.documentElement.classList.toggle('reduce-motion', !!state.settings.reduceMotion);
+  document.documentElement.classList.toggle('jelly', state.settings.jelly !== false);
   applyZoom(state.settings.uiScale || 1);
 }
 
@@ -275,8 +291,41 @@ function viewHome() {
           </button>`).join('')}
       </div>
     </section>
+    ${weekBlock()}
     ${findBlock()}
   </div>`;
+}
+
+/** «Твоя неделя»: сколько играли за последние 7 дней — маленький столбчатый график */
+function weekBlock() {
+  if (state.week === null) { state.week = 'loading'; api.statsSessions().then((l) => { state.week = l; if (state.view === 'home') render(); }).catch(() => { state.week = []; }); return ''; }
+  if (!Array.isArray(state.week)) return '';
+  const DAY = 86400;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const start0 = today.getTime() / 1000 - 6 * DAY;
+  const days = Array.from({ length: 7 }, (_, n) => ({ t: start0 + n * DAY, secs: 0 }));
+  const byInst = {};
+  for (const ses of state.week) {
+    const idx = Math.floor((ses.start - start0) / DAY);
+    if (idx < 0 || idx > 6) continue;
+    days[idx].secs += ses.seconds;
+    byInst[ses.name] = (byInst[ses.name] || 0) + ses.seconds;
+  }
+  const total = days.reduce((a, d) => a + d.secs, 0);
+  if (!total) return '';
+  const max = Math.max(...days.map((d) => d.secs), 1);
+  const top = Object.entries(byInst).sort((a, b) => b[1] - a[1])[0];
+  const lang = document.documentElement.lang;
+  return `<section class="panel pad-s stack" style="gap:12px" aria-label="${esc(t('week.title'))}">
+    <div class="row between">
+      <h2 class="h2-lg">${esc(t('week.title'))}</h2>
+      <span class="small muted">${esc(t('week.total', { t: formatPlayTime(total) }))}${top ? ' · ' + esc(t('week.top', { name: top[0] })) : ''}</span>
+    </div>
+    <div class="week">${days.map((d) => `<div class="week-col" title="${esc(formatPlayTime(d.secs))}">
+        <span class="week-bar" style="height:${Math.max(d.secs ? 6 : 2, Math.round((d.secs / max) * 100))}%"></span>
+        <span class="small muted">${esc(new Date(d.t * 1000).toLocaleDateString(lang, { weekday: 'short' }))}</span>
+      </div>`).join('')}</div>
+  </section>`;
 }
 
 function findBlock() {
@@ -504,7 +553,7 @@ function viewInstance() {
   const e = state.edit;
   if (!e) return viewInstances();
   const tab = state.instTab;
-  const tabs = ['general', 'mods', 'worlds', 'screens', 'launch'].map((k) =>
+  const tabs = ['general', 'mods', 'worlds', 'screens', 'logs', 'launch'].map((k) =>
     `<button role="tab" aria-selected="${tab === k}" data-action="setInstTab" data-tab="${k}">${esc(t('is.tab.' + k))}</button>`).join('');
 
   let body = '';
@@ -513,6 +562,7 @@ function viewInstance() {
   if (tab === 'launch') body = instLaunch(e);
   if (tab === 'worlds') body = instWorlds(e);
   if (tab === 'screens') body = instShots(e);
+  if (tab === 'logs') body = instLogs(e);
 
   return `<div class="view">
     <div class="row" style="gap:14px">
@@ -611,22 +661,88 @@ function instGeneral(e) {
     </div>`;
 }
 
+/** «3 дня назад», «вчера», «только что» */
+function ago(secs) {
+  if (!secs) return '';
+  const d = Date.now() / 1000 - secs;
+  if (d < 90) return t('ago.now');
+  if (d < 3600) return t('ago.min', { n: Math.round(d / 60) });
+  if (d < 86400) return t('ago.hour', { n: Math.round(d / 3600) });
+  if (d < 172800) return t('ago.yesterday');
+  if (d < 86400 * 30) return t('ago.days', { n: Math.round(d / 86400) });
+  return new Date(secs * 1000).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function depsBanner(e) {
+  const d = state.deps;
+  if (d.id !== e.id) { loadDeps(e.id); return ''; }
+  if (!d.list || !d.list.length) return '';
+  return `<section class="panel pad stack" style="gap:8px;border-color:var(--warn-text)">
+    <div class="row" style="gap:10px;flex-wrap:nowrap"><span class="warn">${icon.warn()}</span><h2 class="h2">${esc(t('deps.title'))}</h2></div>
+    ${d.list.map((p) => `<div class="row between" style="gap:10px">
+      <span class="note" style="flex:1 1 300px">${esc(t(p.kind === 'missing' ? 'deps.missing' : 'deps.conflict', { name: p.title, who: p.neededBy.join(', ') }))}</span>
+      ${p.kind === 'missing' ? `<button class="btn sm soft" data-action="installDep" data-pid="${esc(p.projectId)}" data-title="${esc(p.title)}" ${state.res.installing[p.projectId] ? 'disabled' : ''}>${state.res.installing[p.projectId] ? '<span class="spinner"></span>' : ''}${esc(t('deps.install'))}</button>` : ''}
+    </div>`).join('')}
+  </section>`;
+}
+
+const HISTORY_ICON = { installed: 'upload', updated: 'restore', removed: 'trash', enabled: 'play', disabled: 'box', added: 'upload', appeared: 'folder', vanished: 'trash' };
+
+function modHistoryView(e) {
+  const h = state.history;
+  if (h.id !== e.id || h.list === null) {
+    if (!h.loading) loadHistory(e.id);
+    return `<div class="row" style="padding:20px"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
+  }
+  if (!h.list.length) return `<section class="panel empty"><span class="muted">${esc(t('hist.empty'))}</span></section>`;
+  let lastDay = '';
+  const rows = h.list.map((ev) => {
+    const day = new Date(ev.time * 1000).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long', year: 'numeric' });
+    const head = day !== lastDay ? `<div class="folder-head">${esc(day)}</div>` : '';
+    lastDay = day;
+    const ic = icon[HISTORY_ICON[ev.action] || 'box'];
+    return head + `<div class="list-row hist-row hist-${esc(ev.action)}">
+      <span class="thumb mod-icon" style="width:34px;height:34px" aria-hidden="true">${ic(16)}</span>
+      <div class="stack grow" style="gap:2px">
+        <span><b>${esc(ev.name)}</b> <span class="muted">— ${esc(t('hist.' + ev.action))}</span></span>
+        ${ev.detail ? `<span class="small muted ellipsis">${esc(ev.detail)}</span>` : ''}
+      </div>
+      <span class="small muted">${esc(new Date(ev.time * 1000).toLocaleTimeString(document.documentElement.lang, { hour: '2-digit', minute: '2-digit' }))}</span>
+    </div>`;
+  }).join('');
+  return `<p class="note">${esc(t('hist.note'))}</p><section class="panel list">${rows}</section>`;
+}
+
 function instMods(e) {
   if (e.loader === 'vanilla') {
     return `<section class="panel empty">${icon.box()}<p class="note" style="max-width:460px">${esc(t('mods.vanilla'))}</p>
       <button class="btn" data-action="setInstTab" data-tab="general">${esc(t('is.tab.general'))}</button></section>`;
   }
   const m = state.mods;
+  const viewSwitch = `<div class="seg" role="group" aria-label="${esc(t('mods.view'))}">
+      <button data-action="setModView" data-v="list" ${pressed(state.modView === 'list')}>${esc(t('mods.viewList'))}</button>
+      <button data-action="setModView" data-v="history" ${pressed(state.modView === 'history')}>${esc(t('mods.viewHistory'))}</button>
+    </div>`;
+  if (state.modView === 'history') return `<div class="row between">${viewSwitch}</div>` + modHistoryView(e);
   if (m.id !== e.id || m.list === null) {
     if (!m.loading) loadMods(e.id);
     return `<div class="row" style="padding:20px"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
   }
-  const list = m.list;
+  const list = [...m.list].sort(state.modSort === 'added'
+    ? (a, b) => (b.added || 0) - (a.added || 0)
+    : (a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
   const on = m.list.filter((x) => x.enabled).length;
+  const sel = state.modSel;
   const head = `<div class="row between">
       <div class="row" style="flex:1 1 280px">
+        ${viewSwitch}
         <label for="modq" class="sr">${esc(t('mods.search'))}</label>
-        <input id="modq" class="input" type="search" style="max-width:320px" placeholder="${esc(t('mods.search'))}" value="${esc(m.query)}" data-bind="mods.query" data-filter-mods>
+        <input id="modq" class="input" type="search" style="max-width:260px" placeholder="${esc(t('mods.search'))}" value="${esc(m.query)}" data-bind="mods.query" data-filter-mods>
+        <label for="modsort" class="sr">${esc(t('mods.sort'))}</label>
+        <select id="modsort" class="input" style="width:auto" data-change="setModSort">
+          <option value="name" ${state.modSort === 'name' ? 'selected' : ''}>${esc(t('mods.sortName'))}</option>
+          <option value="added" ${state.modSort === 'added' ? 'selected' : ''}>${esc(t('mods.sortAdded'))}</option>
+        </select>
         <span class="small muted">${esc(t('mods.count', { on, all: m.list.length }))}</span>
       </div>
       <div class="row" style="gap:8px">
@@ -639,18 +755,128 @@ function instMods(e) {
     return head + `<section class="panel dashed empty" style="min-height:240px">${icon.upload()}
       <h2 class="h2">${esc(t('mods.empty'))}</h2><p class="note">${esc(t('mods.emptySub'))}</p></section>`;
   }
-  return head + `<section class="panel list" id="mods-list">
+  const bulk = sel.size ? `<div class="bulk-bar row between">
+      <span><b>${esc(t('bulk.selected', { n: sel.size }))}</b></span>
+      <div class="row" style="gap:6px">
+        <button class="btn sm" data-action="bulkMods" data-op="enable">${esc(t('bulk.enable'))}</button>
+        <button class="btn sm" data-action="bulkMods" data-op="disable">${esc(t('bulk.disable'))}</button>
+        <button class="btn sm" data-action="bulkMods" data-op="delete" style="color:var(--warn-text)">${icon.trash()}<span>${esc(t('common.delete'))}</span></button>
+        <button class="btn sm" data-action="bulkClear">${esc(t('bulk.clear'))}</button>
+      </div>
+    </div>` : '';
+  const allChecked = list.length && list.every((x) => sel.has(x.file));
+  return head + depsBanner(e) + bulk + `<section class="panel list" id="mods-list">
+    <label class="check-row" style="padding:4px 12px"><input type="checkbox" data-selall ${allChecked ? 'checked' : ''}><span class="small muted">${esc(t('bulk.all'))}</span></label>
     ${list.map((x) => `<div class="list-row mod-row ${x.enabled ? '' : 'off'}" data-name="${esc(x.name)}" data-file="${esc(x.file)}" ${modMatches(x) ? '' : 'hidden'}>
+      <input type="checkbox" class="mod-check" data-sel="${esc(x.file)}" ${sel.has(x.file) ? 'checked' : ''} aria-label="${esc(t('bulk.pick', { name: x.name }))}">
       <span class="thumb mod-icon" aria-hidden="true">${esc((x.name || '?').charAt(0).toUpperCase())}</span>
       <div class="stack grow" style="gap:2px">
         <span class="row" style="gap:8px"><span class="card-title" style="font-size:calc(14px*var(--fs,1))">${esc(x.name)}</span>${x.version ? `<span class="badge">${esc(x.version)}</span>` : ''}</span>
         ${x.description ? `<span class="small muted ellipsis" style="max-width:560px">${esc(x.description.split('\n')[0])}</span>` : ''}
-        <span class="small muted ellipsis" style="opacity:.75">${esc(x.file)}${x.authors ? ' · ' + esc(t('mods.by', { who: x.authors })) : ''}</span>
+        <span class="small muted ellipsis" style="opacity:.75">${esc(x.file)}${x.authors ? ' · ' + esc(t('mods.by', { who: x.authors })) : ''}${x.added ? ' · ' + esc(t('mods.added', { when: ago(x.added) })) : ''}</span>
       </div>
       <button class="switch-row" style="width:auto;min-height:44px" role="switch" aria-checked="${x.enabled}" aria-label="${esc(t('mods.toggle', { name: x.name }))}" data-action="toggleMod" data-file="${esc(x.file)}"><span class="switch"></span></button>
       <button class="icon-btn" data-action="deleteMod" data-file="${esc(x.file)}" aria-label="${esc(t('mods.delete', { name: x.name }))}" title="${esc(t('mods.delete', { name: x.name }))}">${icon.trash()}</button>
     </div>`).join('')}
   </section>`;
+}
+
+/** Находки Spectia Doctor в виде карточек */
+function doctorCards(findings, recent = []) {
+  if (!findings.length && !recent.length) return '';
+  const cards = findings.map((f) => {
+    const p = { ...f.params };
+    if (p.list) p.list = p.list.map((x) => x.mod && x.need ? t('doc.pair', x) : x.mod && x.other ? t('doc.pairConflict', x) : '').filter(Boolean).join('; ');
+    return `<div class="doc-card">
+      <span class="doc-ico">${icon.warn(18)}</span>
+      <div class="stack" style="gap:4px"><b>${esc(t('doc.' + f.id + '.title', p))}</b><span class="note">${esc(t('doc.' + f.id + '.text', p))}</span>
+      ${p.list ? `<span class="small mono" style="opacity:.85">${esc(p.list)}</span>` : ''}</div>
+    </div>`;
+  }).join('');
+  const changed = recent.length ? `<div class="doc-card soft">
+      <span class="doc-ico">${icon.restore(18)}</span>
+      <div class="stack" style="gap:4px"><b>${esc(t('doc.recent.title'))}</b><span class="note">${esc(t('doc.recent.text'))}</span>
+      <span class="small">${recent.slice(0, 6).map((ev) => `${esc(ev.name)} — ${esc(t('hist.' + ev.action))} (${esc(ago(ev.time))})`).join('<br>')}</span></div>
+    </div>` : '';
+  return `<div class="stack" style="gap:8px">${cards}${changed}</div>`;
+}
+
+function instLogs(e) {
+  const L = state.logs;
+  if (L.id !== e.id || !L.data) {
+    if (!L.loading) loadLogs(e.id);
+    return `<div class="row" style="padding:20px"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
+  }
+  const d = L.data;
+  const text = L.source === 'crash' ? d.crash : L.source === 'latest' ? d.latest : d.launcher;
+  const findings = diagnose(d.launcher, d.crash);
+  const desc = crashDescription(d.crash);
+  return `
+    <section class="panel pad stack" style="gap:12px">
+      <div class="row between">
+        <div class="row" style="gap:10px;flex-wrap:nowrap"><span class="avatar" style="width:36px;height:36px;background:var(--accent-soft);color:var(--accent-text)">${icon.sparkle(18)}</span>
+          <div class="stack" style="gap:2px"><h2 class="h2">Spectia Doctor</h2><span class="note">${esc(findings.length ? t('doc.found', { n: findings.length }) : t('doc.clean'))}</span></div></div>
+        <button class="btn sm" data-action="reloadLogs">${icon.restore()}<span>${esc(t('logs.reload'))}</span></button>
+      </div>
+      ${desc ? `<p class="note">${esc(t('logs.crashDesc', { text: desc }))}</p>` : ''}
+      ${doctorCards(findings, (state.history.id === e.id && state.history.list) ? state.history.list.filter((ev) => ev.time > (e.lastPlayed || 0) - 86400 * 2).slice(0, 6) : [])}
+    </section>
+    <section class="panel pad stack" style="gap:10px">
+      <div class="row between">
+        <div class="seg" role="group" aria-label="${esc(t('logs.source'))}">
+          <button data-action="setLogSource" data-v="launcher" ${pressed(L.source === 'launcher')}>${esc(t('logs.src.launcher'))}</button>
+          <button data-action="setLogSource" data-v="latest" ${pressed(L.source === 'latest')}>${esc(t('logs.src.latest'))}</button>
+          ${d.crash ? `<button data-action="setLogSource" data-v="crash" ${pressed(L.source === 'crash')}>${esc(t('logs.src.crash'))}</button>` : ''}
+        </div>
+        <div class="row" style="gap:6px">
+          <div class="seg" role="group" aria-label="${esc(t('logs.filter'))}">
+            ${['all', 'warn', 'error'].map((f) => `<button data-action="setLogFilter" data-v="${f}" ${pressed(L.filter === f)}>${esc(t('logs.f.' + f))}</button>`).join('')}
+          </div>
+          <label for="logq" class="sr">${esc(t('logs.search'))}</label>
+          <input id="logq" class="input" type="search" style="width:200px" placeholder="${esc(t('logs.search'))}" value="${esc(L.query)}" data-bind="logs.query" data-log-search>
+          <button class="btn sm" data-action="copyLogs">${icon.copy()}<span>${esc(t('launch.copyLog'))}</span></button>
+          <button class="icon-btn" style="width:34px;height:34px" data-action="openLogsFolder" aria-label="${esc(t('logs.folder'))}" title="${esc(t('logs.folder'))}">${icon.folder(16)}</button>
+        </div>
+      </div>
+      <pre class="log log-view" id="log-view">${logLinesHtml(text)}</pre>
+    </section>`;
+}
+
+function logLinesHtml(text) {
+  const L = state.logs;
+  const q = L.query.trim().toLowerCase();
+  const shown = String(text || '').split('\n').map((line) => ({ line, lvl: lineLevel(line) }))
+    .filter((x) => (L.filter === 'all' || (L.filter === 'warn' ? x.lvl !== 'info' : x.lvl === 'error')) && (!q || x.line.toLowerCase().includes(q)))
+    .slice(-1500);
+  return shown.length
+    ? shown.map((x) => `<span class="ll ll-${x.lvl}">${esc(x.line)}</span>`).join('\n')
+    : `<span class="muted">${esc(t(text ? 'logs.nothing' : 'logs.empty'))}</span>`;
+}
+
+const currentLogText = () => {
+  const d = state.logs.data || {};
+  return state.logs.source === 'crash' ? d.crash : state.logs.source === 'latest' ? d.latest : d.launcher;
+};
+
+async function loadLogs(id) {
+  state.logs = { ...state.logs, id, data: null, loading: true };
+  try { state.logs.data = await api.gameLogs(id); } catch { state.logs.data = { launcher: '', latest: '', crash: '' }; }
+  state.logs.loading = false;
+  if (state.history.id !== id) loadHistory(id);
+  if (state.view === 'instance' && state.instTab === 'logs') render();
+}
+
+async function loadHistory(id) {
+  state.history = { id, list: null, loading: true };
+  try { state.history.list = await api.modHistory(id); } catch { state.history.list = []; }
+  state.history.loading = false;
+  if (state.view === 'instance') render();
+}
+
+async function loadDeps(id) {
+  state.deps = { id, list: null };
+  try { state.deps.list = await api.checkDependencies(id); } catch { state.deps.list = []; }
+  if (state.view === 'instance' && state.instTab === 'mods' && state.deps.list.length) render();
 }
 
 function instWorlds(e) {
@@ -857,7 +1083,10 @@ async function loadMods(id) {
 function installButton(m) {
   const r = state.res;
   if (r.installing[m.id]) return `<button class="btn sm soft" disabled><span class="spinner"></span>${esc(t('res.installing'))}</button>`;
-  if (r.kind !== 'modpack' && r.installed.has(m.id)) return `<button class="btn sm" disabled>${esc(t('res.installed'))}</button>`;
+  if (r.kind !== 'modpack' && r.kind !== 'datapack' && r.installed.has(m.id)) {
+    return `<span class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" disabled>${esc(t('res.installed'))}</button>
+      <button class="icon-btn" style="width:34px;height:34px" data-action="uninstall" data-pid="${esc(m.id)}" data-title="${esc(m.title)}" aria-label="${esc(t('res.uninstall', { name: m.title }))}" title="${esc(t('res.uninstall', { name: m.title }))}">${icon.trash()}</button></span>`;
+  }
   return `<button class="btn sm soft" data-action="install" data-pid="${esc(m.id)}" data-title="${esc(m.title)}">${esc(t('res.install'))}</button>`;
 }
 
@@ -888,7 +1117,7 @@ function resultsHtml() {
     results = `<section class="panel empty"><span class="muted">${esc(t('res.nothing'))}</span></section>`;
   } else if (r.results) {
     results = `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">
-      ${r.results.map((m) => `<article class="panel result">
+      ${r.results.map((m) => `<article class="panel result clickable" data-action="openProject" data-pid="${esc(m.id)}" tabindex="0">
         ${m.icon ? `<img class="thumb" src="${esc(m.icon)}" alt="" loading="lazy">` : `<span class="thumb" style="background:${TINTS[5]}"></span>`}
         <div class="stack grow" style="gap:6px">
           <div class="row" style="gap:8px">
@@ -897,7 +1126,8 @@ function resultsHtml() {
           </div>
           <span class="small muted">${esc(t('res.by', { author: m.author }))} · ${esc(t('res.downloads', { n: formatNumber(m.downloads) }))}</span>
           <p class="note" style="line-height:1.45">${esc(m.description)}</p>
-          <a href="#" class="small" data-action="openUrl" data-url="${esc(m.url)}">modrinth.com</a>
+          ${(m.categories || []).filter((c) => (CATEGORIES[r.kind] || []).includes(c)).slice(0, 3).length
+            ? `<span class="row" style="gap:4px">${m.categories.filter((c) => (CATEGORIES[r.kind] || []).includes(c)).slice(0, 3).map((c) => `<span class="badge">${esc(t('cat.' + c))}</span>`).join('')}</span>` : ''}
         </div>
         ${installButton(m)}
       </article>`).join('')}
@@ -932,6 +1162,10 @@ function viewResources() {
           <button data-action="setSource" data-source="curseforge" ${pressed(r.source === 'curseforge')}>CurseForge</button>
         </div>
       </div>
+      ${r.source === 'modrinth' && CATEGORIES[r.kind] ? `<div class="row" style="gap:6px" role="group" aria-label="${esc(t('res.categories'))}">
+        ${CATEGORIES[r.kind].map((c) => `<button class="pill sm" data-action="toggleCat" data-cat="${c}" ${pressed(r.cats.includes(c))}>${esc(t('cat.' + c))}</button>`).join('')}
+        ${r.cats.length ? `<button class="pill sm" data-action="clearCats">${esc(t('res.clearCats'))}</button>` : ''}
+      </div>` : ''}
       ${target ? `<span class="small muted">${esc(t('res.filterNote', { version: target.gameVersion, loader: loaderLabel(target.loader) }))}</span>` : ''}
     </section>
     <div id="res-results">${resultsHtml()}</div>
@@ -968,7 +1202,7 @@ function viewSkins() {
   const picked = lib.find((k) => k.file === sk.pick) || null;
   const cur = sk.account && sk.account !== 'loading' ? sk.account : null;
   const activeCape = cur?.capes?.find((c) => c.active)?.image || '';
-  const isMs = acc?.kind === 'microsoft';
+  const isMs = acc?.kind === 'microsoft' || acc?.kind === 'prism';
 
   // Что показываем на большой сцене: выбранный в коллекции скин или текущий скин аккаунта
   let stage;
@@ -1059,14 +1293,17 @@ function viewAccounts() {
         <button class="btn accent" style="align-self:flex-start" data-action="openEly">${esc(t('acc.elyBtn'))}</button>
       </section>
       <section class="panel pad stack">
+        <span class="avatar" style="width:28px;height:28px;border-radius:6px;background:var(--accent-soft);color:var(--accent-text)">${icon.move(16)}</span>
+        <h3 class="h2">${esc(t('acc.prism'))}</h3>
+        <p class="note">${esc(t('acc.prismText'))}</p>
+        <button class="btn accent" style="align-self:flex-start" data-action="openPrismAccounts">${esc(t('acc.prismBtn'))}</button>
+      </section>
+      ${state.msReady ? `<section class="panel pad stack">
         ${icon.microsoft()}
         <h3 class="h2">${esc(t('acc.ms'))}</h3>
         <p class="note">${esc(t(state.msBusy ? 'acc.msWaiting' : 'acc.msText'))}</p>
-        ${state.msReady
-          ? `<button class="btn accent" style="align-self:flex-start" data-action="msLogin" ${state.msBusy ? 'disabled' : ''}>${state.msBusy ? '<span class="spinner"></span>' : ''}${esc(t('acc.msBtn'))}</button>`
-          : `<span class="badge" style="align-self:flex-start;padding:6px 12px">${esc(t('acc.msPending'))}</span>
-             <p class="small muted">${esc(t('acc.msPendingSub'))}</p>`}
-      </section>
+        <button class="btn accent" style="align-self:flex-start" data-action="msLogin" ${state.msBusy ? 'disabled' : ''}>${state.msBusy ? '<span class="spinner"></span>' : ''}${esc(t('acc.msBtn'))}</button>
+      </section>` : ''}
     </div>
   </div>`;
 }
@@ -1155,6 +1392,7 @@ function setLook(s) {
         </div>
       </div>
       <div class="row"><button class="btn sm" data-action="resetLook">${esc(t('look.reset'))}</button></div>
+      ${switchRow('toggleOn', 'jelly', s.jelly !== false, t('look.jelly'), t('look.jellySub'))}
       ${switchRow('toggleSetting', 'reduceMotion', s.reduceMotion, t('set.reduceMotion'), t('set.reduceMotionSub'))}
     </section>`;
 }
@@ -1169,6 +1407,15 @@ function setSound(s) {
         <button class="btn sm" data-action="testChime">${icon.bell(16)}<span>${esc(t('snd.test'))}</span></button>
       </div>` : ''}
       ${switchRow('toggleOn', 'notifications', s.notifications !== false, t('snd.notify'), t('snd.notifySub'))}
+    </section>
+    <section class="panel pad stack" style="gap:8px">
+      <h2 class="h2">${esc(t('music.title'))}</h2>
+      ${rangeRow({ id: 'musvol', key: 'musicVolume', label: t('music.volume'), min: 5, max: 100, step: 5, value: s.musicVolume ?? 70, unit: '%' })}
+    </section>
+    <section class="panel pad stack" style="gap:6px">
+      <h2 class="h2">Discord</h2>
+      ${switchRow('toggleOn', 'discord', s.discord !== false, t('dc.show'), t('dc.showSub'))}
+      ${s.discord !== false ? switchRow('toggleSetting', 'discordHideName', s.discordHideName, t('dc.hideName'), t('dc.hideNameSub')) : ''}
     </section>`;
 }
 
@@ -1233,6 +1480,11 @@ function setGeneral(s) {
         <p class="note">${esc(t('set.disclaimer'))}</p>
         <a href="#" data-action="openUrl" data-url="${REPO_URL}">${esc(t('set.sourceCode'))}</a>
       </section>
+      <section class="panel pad stack">
+        <h2 class="h2">${esc(t('bug.title'))}</h2>
+        <p class="note">${esc(t('bug.settingsNote'))}</p>
+        <button class="btn" style="align-self:flex-start" data-action="openBugReport">${esc(t('bug.button'))}</button>
+      </section>
     </div>`;
 }
 
@@ -1249,7 +1501,138 @@ function viewSettings() {
   </div>`;
 }
 
-const VIEWS = { home: viewHome, instances: viewInstances, create: viewCreate, instance: viewInstance, resources: viewResources, skins: viewSkins, accounts: viewAccounts, settings: viewSettings };
+// ---------- Новости ----------
+
+async function loadNews() {
+  state.news.error = false;
+  try { state.news.list = await api.minecraftNews(); } catch { state.news.list = []; state.news.error = true; }
+  if (state.view === 'news') render();
+}
+
+async function loadTrend() {
+  try { state.news.trend = await trending('mod'); } catch { state.news.trend = { spotlight: null, rising: [], updated: [] }; }
+  if (state.view === 'news') render();
+}
+
+function miniProject(m) {
+  return `<button class="card news-proj" data-action="openProject" data-pid="${esc(m.id)}" data-kind="mod">
+    ${m.icon ? `<img class="thumb" src="${esc(m.icon)}" alt="" loading="lazy">` : `<span class="thumb" style="background:${TINTS[5]}"></span>`}
+    <span class="stack" style="gap:2px;min-width:0"><span class="card-title ellipsis" style="font-size:calc(14px*var(--fs,1))">${esc(m.title)}</span>
+      <span class="small muted ellipsis">${esc(m.description)}</span></span>
+  </button>`;
+}
+
+function viewNews() {
+  const n = state.news;
+  if (n.list === null && !n.loading) { n.loading = true; loadNews().finally(() => { n.loading = false; }); }
+  if (n.trend === null && !n.trendLoading) { n.trendLoading = true; loadTrend(); }
+  const tabs = ['all', 'minecraft', 'updates', 'mods'].map((k) => `<button role="tab" aria-selected="${n.tab === k}" data-action="setNewsTab" data-tab="${k}">${esc(t('news.tab.' + k))}</button>`).join('');
+  const tr = n.trend;
+  const spotlight = tr?.spotlight ? `<section class="panel spotlight" data-action="openProject" data-pid="${esc(tr.spotlight.id)}" data-kind="mod" tabindex="0">
+      ${tr.spotlight.icon ? `<img src="${esc(tr.spotlight.icon)}" alt="" class="spot-icon">` : ''}
+      <div class="stack" style="gap:6px;min-width:0">
+        <span class="eyebrow" style="color:var(--accent-text)">${icon.star(14)} ${esc(t('news.spotlight'))}</span>
+        <h2 class="h2-lg">${esc(tr.spotlight.title)}</h2>
+        <p class="note">${esc(tr.spotlight.description)}</p>
+        <span class="small muted">${esc(t('res.downloads', { n: formatNumber(tr.spotlight.downloads) }))} · ${esc(t('news.spotlightWhy'))}</span>
+      </div>
+    </section>` : '';
+  const modsBlock = tr ? `${spotlight}
+      ${tr.rising.length ? `<h2 class="h2" style="margin:4px 0 0 4px">${esc(t('news.rising'))}</h2><div class="grid news-grid">${tr.rising.map(miniProject).join('')}</div>` : ''}
+      ${tr.updated.length ? `<h2 class="h2" style="margin:4px 0 0 4px">${esc(t('news.updated'))}</h2><div class="grid news-grid">${tr.updated.map(miniProject).join('')}</div>` : ''}
+      ${!tr.spotlight && !tr.rising.length && !tr.updated.length ? `<section class="panel empty"><span class="muted">${esc(t('res.error', { source: 'Modrinth' }))}</span></section>` : ''}`
+    : `<div class="row" style="padding:20px"><span class="spinner"></span></div>`;
+
+  const items = (n.list || []).filter((x) => n.tab === 'all' || (n.tab === 'minecraft' ? x.kind === 'news' : n.tab === 'updates' ? x.kind !== 'news' : false));
+  const article = (x) => `<article class="panel news-card" ${x.url || x.contentPath ? `data-action="openNews" data-id="${esc(x.id)}" tabindex="0"` : ''}>
+      ${x.image ? `<img class="news-img" src="${esc(x.image)}" alt="" loading="lazy">` : `<span class="news-img" style="background:${TINTS[x.kind === 'news' ? 1 : x.kind === 'snapshot' ? 4 : 2]}"></span>`}
+      <div class="stack" style="gap:6px;padding:14px">
+        <span class="row" style="gap:6px"><span class="badge">${esc(t('news.kind.' + x.kind))}</span><span class="small muted">${esc(x.date ? new Date(x.date).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long', year: 'numeric' }) : '')}</span></span>
+        <h2 class="h2">${esc(x.title)}</h2>
+        ${x.text ? `<p class="note">${esc(x.text)}</p>` : ''}
+      </div>
+    </article>`;
+  let body;
+  if (n.tab === 'mods') body = modsBlock;
+  else if (n.list === null) body = `<div class="row" style="padding:20px"><span class="spinner"></span><span class="muted">${esc(t('common.loading'))}</span></div>`;
+  else if (n.error && !n.list.length) body = `<section class="panel empty"><span class="warn">${esc(t('news.error'))}</span><button class="btn sm" data-action="reloadNews">${esc(t('create.retry'))}</button></section>`;
+  else body = (n.tab === 'all' && tr?.spotlight ? spotlight : '') + `<div class="news-list">${items.map(article).join('')}</div>`;
+
+  // «Обновились в ваших сборках» — напоминание, что можно проверить обновления
+  return `<div class="view">
+    <h1 class="page-title">${esc(t('news.title'))}</h1>
+    <div class="tabs" role="tablist">${tabs}</div>
+    ${n.tab === 'mods' || n.tab === 'all' ? `<section class="panel pad-s row between" style="gap:12px">
+      <span class="note" style="flex:1 1 300px">${esc(t('news.myMods'))}</span>
+      <button class="btn sm soft" data-action="checkAllUpdates" ${state.allUpdates?.busy ? 'disabled' : ''}>${state.allUpdates?.busy ? '<span class="spinner"></span>' : ''}${esc(t('news.checkMine'))}</button>
+    </section>${state.allUpdates?.list ? allUpdatesHtml() : ''}` : ''}
+    ${body}
+  </div>`;
+}
+
+function allUpdatesHtml() {
+  const list = state.allUpdates.list;
+  if (!list.length) return `<p class="note" style="margin-left:4px">${esc(t('news.allFresh'))}</p>`;
+  return `<section class="panel list">${list.map((g) => `<div class="list-row">
+      <span class="thumb" style="width:36px;height:36px;${coverBg(state.instances.find((i) => i.id === g.id))}"></span>
+      <div class="stack grow" style="gap:2px"><b>${esc(g.name)}</b>
+        <span class="small muted">${g.updates.slice(0, 6).map((u) => `${esc(u.name)} ${esc(u.current)} → ${esc(u.latest)}`).join(' · ')}${g.updates.length > 6 ? ' …' : ''}</span></div>
+      <button class="btn sm" data-action="openInstance" data-id="${esc(g.id)}" data-tab="mods">${esc(t('news.openMods'))}</button>
+    </div>`).join('')}</section>`;
+}
+
+// ---------- Музыка ----------
+
+const MUSIC_GROUPS = ['menu', 'game', 'creative', 'water', 'nether', 'end', 'records', 'other'];
+
+async function loadMusic() {
+  try { state.music.list = await api.listMusic(); } catch { state.music.list = []; }
+  if (state.view === 'music') render();
+}
+
+function viewMusic() {
+  const mu = state.music;
+  if (mu.list === null && !mu.loading) { mu.loading = true; loadMusic().finally(() => { mu.loading = false; }); }
+  if (mu.list === null) return `<div class="view"><h1 class="page-title">${esc(t('music.title'))}</h1><div class="row" style="padding:20px"><span class="spinner"></span></div></div>`;
+  const groups = MUSIC_GROUPS.filter((g) => mu.list.some((x) => x.group === g));
+  const list = mu.list.filter((x) => mu.group === 'all' || x.group === mu.group);
+  const empty = `<section class="panel empty">${icon.bell(32)}<h2 class="h2">${esc(t('music.empty'))}</h2><p class="note" style="max-width:480px">${esc(t('music.emptySub'))}</p></section>`;
+  return `<div class="view">
+    <div class="row between">
+      <h1 class="page-title">${esc(t('music.title'))}</h1>
+      ${mu.list.length ? `<div class="row" style="gap:8px">
+        <button class="btn sm ${mu.shuffle ? 'soft' : ''}" data-action="toggleShuffle" ${pressed(mu.shuffle)}>${esc(t('music.shuffle'))}</button>
+        <button class="btn sm accent" data-action="playAll">${icon.play(14)}<span>${esc(t('music.playAll'))}</span></button>
+      </div>` : ''}
+    </div>
+    <p class="note" style="margin-left:4px">${esc(t('music.note'))}</p>
+    ${mu.list.length ? `<div class="row" style="gap:6px" role="group" aria-label="${esc(t('music.groups'))}">
+        <button class="pill" data-action="setMusicGroup" data-g="all" ${pressed(mu.group === 'all')}>${esc(t('music.all'))}</button>
+        ${groups.map((g) => `<button class="pill" data-action="setMusicGroup" data-g="${g}" ${pressed(mu.group === g)}>${esc(t('music.g.' + g))}</button>`).join('')}
+      </div>
+      <section class="panel list">${list.map((x) => `<button class="list-row track ${mu.current?.key === x.key ? 'on' : ''}" data-action="playTrack" data-key="${esc(x.key)}">
+          <span class="thumb mod-icon" style="width:38px;height:38px" aria-hidden="true">${mu.current?.key === x.key && mu.playing ? '<span class="eq"><i></i><i></i><i></i></span>' : icon.play(14)}</span>
+          <span class="grow card-title" style="font-size:calc(14px*var(--fs,1));text-align:left">${esc(x.title)}</span>
+          <span class="small muted">${esc(t('music.g.' + x.group))}</span>
+        </button>`).join('')}</section>` : empty}
+  </div>`;
+}
+
+/** Маленький плеер внизу меню: виден на любом экране, пока играет музыка */
+function playerHtml() {
+  const mu = state.music;
+  if (!mu.current) return '';
+  return `<div class="player">
+    <div class="stack" style="gap:2px;min-width:0"><span class="small muted">${esc(t('music.now'))}</span><b class="ellipsis">${esc(mu.current.title)}</b></div>
+    <div class="row" style="gap:4px;flex-wrap:nowrap">
+      <button class="icon-btn" style="width:32px;height:32px" data-action="musicToggle" aria-label="${esc(t(mu.playing ? 'music.pause' : 'music.play'))}">${mu.playing ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>' : icon.play(14)}</button>
+      <button class="icon-btn" style="width:32px;height:32px" data-action="musicNext" aria-label="${esc(t('music.next'))}">${icon.chevronRight(14)}</button>
+      <button class="icon-btn" style="width:32px;height:32px" data-action="musicStop" aria-label="${esc(t('music.stop'))}">${icon.close()}</button>
+    </div>
+  </div>`;
+}
+
+const VIEWS = { home: viewHome, instances: viewInstances, create: viewCreate, instance: viewInstance, resources: viewResources, news: viewNews, music: viewMusic, skins: viewSkins, accounts: viewAccounts, settings: viewSettings };
 
 // ---------- Отрисовка ----------
 
@@ -1257,6 +1640,8 @@ function renderChrome() {
   $('#titlebar').innerHTML = `
     <div class="brand" data-tauri-drag-region>${icon.moon()}<span data-tauri-drag-region>Spectia</span></div>
     <div class="winbtns">
+      <button class="winbtn" data-action="openPalette" aria-label="${esc(t('pal.open'))}" title="${esc(t('pal.open'))} (Ctrl+K)">${icon.search(14)}</button>
+      <button class="winbtn" data-action="toggleMini" aria-label="${esc(t(state.mini ? 'mini.exit' : 'mini.enter'))}" title="${esc(t(state.mini ? 'mini.exit' : 'mini.enter'))}">${state.mini ? icon.maximize() : '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="5.5" y="5.5" width="5" height="5" rx="1" fill="none" stroke="currentColor"/><path d="M1.5 6V2.5a1 1 0 0 1 1-1H9" fill="none" stroke="currentColor"/></svg>'}</button>
       <button class="winbtn" data-action="winMin" aria-label="${esc(t('win.minimize'))}">${icon.minimize()}</button>
       <button class="winbtn" data-action="winMax" aria-label="${esc(t('win.maximize'))}">${icon.maximize()}</button>
       <button class="winbtn close" data-action="winClose" aria-label="${esc(t('win.close'))}">${icon.close()}</button>
@@ -1269,6 +1654,7 @@ function renderChrome() {
       ${NAV.map((n) => `<button class="nav-item" data-action="nav" data-view="${n.view}" aria-current="${n.id === active ? 'page' : 'false'}"><span class="bar"></span><span>${esc(t('nav.' + n.id))}</span></button>`).join('')}
     </div>
     <div class="stack" style="gap:8px">
+      ${playerHtml()}
       <span class="small muted" style="padding:0 4px">${esc(t('nav.account'))}</span>
       <button class="account" data-action="nav" data-view="accounts" aria-label="${esc(t('nav.manageAccounts'))}">
         ${(() => {
@@ -1330,6 +1716,138 @@ function miniMarkdown(text) {
     else html += `<p>${inline(line)}</p>`;
   }
   return html + (inList ? '</ul>' : '');
+}
+
+/**
+ * Описание мода с Modrinth: это Markdown вперемешку с HTML. Чужой HTML мы никогда
+ * не вставляем как есть (это небезопасно) — оставляем только картинки и ссылки,
+ * а всё остальное превращаем в обычный текст.
+ */
+function safeMarkdown(src) {
+  let text = String(src || '')
+    .replace(/<img[^>]*?src=["']([^"']+)["'][^>]*>/gi, '\n![]($1)\n')
+    .replace(/<a[^>]*?href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href, inner) => `[${inner.replace(/<[^>]+>/g, '').trim() || href}](${href})`)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h\d|li|center|details|summary)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+  const okUrl = (u) => /^https:\/\//i.test(u);
+  const inline = (line) => {
+    const parts = [];
+    // Сначала вынимаем картинки и ссылки, чтобы экранировать остальное
+    line = line.replace(/!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g, (_, u) => { parts.push(okUrl(u) ? `<img class="md-img" src="${esc(u)}" alt="" loading="lazy">` : ''); return `\u0000${parts.length - 1}\u0000`; });
+    line = line.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (_, label, u) => { parts.push(okUrl(u) ? `<a href="#" data-action="openUrl" data-url="${esc(u)}">${esc(label)}</a>` : esc(label)); return `\u0000${parts.length - 1}\u0000`; });
+    let html = esc(line)
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/__(.+?)__/g, '<b>$1</b>')
+      .replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, '$1<i>$2</i>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+    return html.replace(/\u0000(\d+)\u0000/g, (_, n) => parts[Number(n)]);
+  };
+  let html = '';
+  let list = false;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (/^[-*+] /.test(line)) {
+      if (!list) { html += '<ul>'; list = true; }
+      html += `<li>${inline(line.slice(2))}</li>`;
+      continue;
+    }
+    if (list) { html += '</ul>'; list = false; }
+    if (!line || /^[-*_]{3,}$/.test(line)) continue;
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) html += `<p class="h2" style="margin-top:6px">${inline(h[2])}</p>`;
+    else if (line.startsWith('>')) html += `<p class="note">${inline(line.replace(/^>\s?/, ''))}</p>`;
+    else html += `<p>${inline(line)}</p>`;
+  }
+  return html + (list ? '</ul>' : '');
+}
+
+function projectDialog(d) {
+  const p = d.data;
+  let body;
+  if (d.error) body = `<p class="warn">${esc(t('res.error', { source: 'Modrinth' }))}</p>`;
+  else if (!p) body = `<div class="row" style="padding:30px;justify-content:center"><span class="spinner"></span></div>`;
+  else {
+    const date = (iso) => (iso ? new Date(iso).toLocaleDateString(document.documentElement.lang, { day: 'numeric', month: 'long', year: 'numeric' }) : '—');
+    const tab = d.tab || 'about';
+    const tabs = ['about', 'gallery', 'versions'].filter((k) => k !== 'gallery' || p.gallery.length)
+      .map((k) => `<button role="tab" aria-selected="${tab === k}" data-action="setProjectTab" data-tab="${k}">${esc(t('proj.tab.' + k))}</button>`).join('');
+    let inner = '';
+    if (tab === 'about') inner = `<div class="md">${safeMarkdown(p.body) || esc(p.description)}</div>`;
+    if (tab === 'gallery') inner = `<div class="gallery">${p.gallery.map((g) => `<figure><img src="${esc(g.url)}" alt="" loading="lazy">${g.title ? `<figcaption class="small muted">${esc(g.title)}</figcaption>` : ''}</figure>`).join('')}</div>`;
+    if (tab === 'versions') inner = p.versions.length
+      ? `<div class="list" style="padding:0">${p.versions.map((v) => `<div class="list-row"><div class="stack grow" style="gap:2px"><b>${esc(v.name)}</b>
+          <span class="small muted">${esc((v.loaders || []).join(', '))} · ${esc((v.games || []).slice(-4).join(', '))}</span></div>
+          <span class="badge">${esc(t('proj.vt.' + v.type))}</span><span class="small muted">${esc(date(v.date))}</span></div>`).join('')}</div>`
+      : `<p class="note">${esc(t('proj.noVersions'))}</p>`;
+    const links = Object.entries(p.links).filter(([, u]) => u).map(([k, u]) => `<a href="#" class="small" data-action="openUrl" data-url="${esc(u)}">${esc(t('proj.link.' + k))}</a>`).join(' · ');
+    body = `<div class="row" style="gap:14px;flex-wrap:nowrap;align-items:flex-start">
+        ${p.icon ? `<img class="thumb" style="width:64px;height:64px;border-radius:14px" src="${esc(p.icon)}" alt="">` : ''}
+        <div class="stack" style="gap:4px;min-width:0">
+          <h2 id="dlg-title">${esc(p.title)}</h2>
+          <span class="note">${esc(p.description)}</span>
+          <span class="small muted">${p.authors.length ? esc(t('res.by', { author: p.authors.slice(0, 3).join(', ') })) + ' · ' : ''}${esc(t('res.downloads', { n: formatNumber(p.downloads) }))} · ${esc(t('proj.updated', { date: date(p.updated) }))}${p.license ? ' · ' + esc(p.license) : ''}</span>
+          <span class="row" style="gap:4px">${p.categories.filter((c) => Object.values(CATEGORIES).flat().includes(c)).map((c) => `<span class="badge">${esc(t('cat.' + c))}</span>`).join('')}</span>
+        </div>
+      </div>
+      ${p.deps.length ? `<p class="small"><b>${esc(t('proj.deps'))}</b> ${p.deps.map((x) => esc(x.title) + (x.type === 'optional' ? ' (' + esc(t('proj.optional')) + ')' : '')).join(', ')}</p>` : ''}
+      <div class="tabs" role="tablist">${tabs}</div>
+      <div class="proj-body">${inner}</div>
+      <div class="row between">
+        <span class="row" style="gap:6px">${links}</span>
+        <span class="row" style="gap:8px">
+          <button class="btn" data-action="closeDialog">${esc(t('common.close'))}</button>
+          ${d.kind === state.res.kind && state.view === 'resources' ? installButton({ id: p.id, title: p.title }) : ''}
+        </span>
+      </div>`;
+  }
+  return `<div class="overlay" data-action="closeDialog"><div class="dialog project-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>${body}</div></div>`;
+}
+
+// ---------- Ctrl+K ----------
+
+function paletteItems() {
+  const go = (view, extra = {}) => ({ run: () => { state.palette = null; if (view === 'resources' && !state.res.results) runSearch(); actions.nav({ view, ...extra }); } });
+  const items = [];
+  for (const i of state.instances) {
+    items.push({ label: t('pal.play', { name: i.name }), hint: `${i.gameVersion} · ${loaderLabel(i.loader)}`, ic: 'play', run: () => { state.palette = null; actions.playInstance({ id: i.id }); } });
+    items.push({ label: t('pal.settings', { name: i.name }), hint: t('pal.instance'), ic: 'gear', run: () => { state.palette = null; renderOverlay(); actions.openInstance({ id: i.id }); } });
+  }
+  for (const n of NAV) items.push({ label: t('nav.' + n.id), hint: t('pal.section'), ic: 'chevronRight', ...go(n.view) });
+  items.push({ label: t('acc.title'), hint: t('pal.section'), ic: 'chevronRight', ...go('accounts') });
+  for (const k of ['look', 'sound', 'game', 'general']) items.push({ label: t('set.title') + ': ' + t('set.tab.' + k), hint: t('pal.section'), ic: 'gear', run: () => { state.palette = null; state.setTab = k; go('settings').run(); } });
+  items.push({ label: t('home.newInstance'), hint: t('pal.action'), ic: 'sparkle', run: () => { state.palette = null; actions.openCreate(); } });
+  items.push({ label: t('inst.import'), hint: t('pal.action'), ic: 'upload', run: () => { state.palette = null; renderOverlay(); actions.importPack(); } });
+  items.push({ label: t('prism.button'), hint: t('pal.action'), ic: 'move', run: () => { state.palette = null; actions.openPrism(); } });
+  items.push({ label: t('mini.enter'), hint: t('pal.action'), ic: 'box', run: () => { state.palette = null; actions.toggleMini(); } });
+  items.push({ label: t('bug.title'), hint: t('pal.action'), ic: 'warn', run: () => { state.palette = null; actions.openBugReport(); } });
+  for (const id of THEME_ORDER) items.push({ label: t('pal.theme', { name: t('theme.' + id) }), hint: t('set.theme'), ic: 'palette', run: () => { state.palette = null; actions.setTheme({ theme: id }); } });
+  return items;
+}
+
+function paletteResults() {
+  const q = state.palette.query.trim();
+  const all = paletteItems();
+  if (!q) return all.slice(0, 9);
+  return all.map((x) => ({ x, sc: matchScore(q, x.label, x.hint) })).filter((r) => r.sc > 0).sort((a, b) => b.sc - a.sc).slice(0, 9).map((r) => r.x);
+}
+
+function paletteListHtml() {
+  const list = paletteResults();
+  state.palette.sel = Math.min(state.palette.sel, Math.max(0, list.length - 1));
+  return list.length ? list.map((x, n) => `<button class="pal-item" role="option" aria-selected="${n === state.palette.sel}" data-action="palRun" data-n="${n}">
+      <span class="pal-ico">${(icon[x.ic] || icon.chevronRight)(16)}</span><span class="grow ellipsis">${esc(x.label)}</span><span class="small muted">${esc(x.hint)}</span>
+    </button>`).join('') : `<p class="note" style="padding:12px">${esc(t('pal.nothing'))}</p>`;
+}
+
+function paletteHtml() {
+  return `<div class="overlay" style="padding-top:90px" data-action="closePalette"><div class="dialog palette" role="dialog" aria-modal="true" aria-label="${esc(t('pal.open'))}" data-stop>
+    <div class="row" style="gap:10px;flex-wrap:nowrap">${icon.search(18)}
+      <input id="pal-input" class="input" style="border:0;box-shadow:none;background:transparent;font-size:calc(16px*var(--fs,1))" placeholder="${esc(t('pal.placeholder'))}" value="${esc(state.palette.query)}" data-bind="palette.query" data-palette autofocus></div>
+    <div class="pal-list" role="listbox" id="pal-list">${paletteListHtml()}</div>
+    <span class="small muted">${esc(t('pal.hint'))}</span>
+  </div></div>`;
 }
 
 function updateDialog() {
@@ -1436,9 +1954,11 @@ function renderOverlay() {
         <span class="avatar" style="background:var(--warn-soft);color:var(--warn-text)">${icon.warn()}</span>
         <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('launch.crashTitle'))}</h2><p class="note">${esc(t('launch.crashText'))}</p></div>
       </div>
-      <pre class="log">${esc(d.log || '—')}</pre>
+      ${doctorCards(diagnose(d.log, d.crash || ''))}
+      <pre class="log" style="max-height:200px">${esc(d.log || '—')}</pre>
       <div class="row" style="justify-content:flex-end">
-        <button class="btn" data-action="openFolder" data-id="${esc(d.id)}">${icon.folder()}<span>${esc(t('inst.openFolder'))}</span></button>
+        <button class="btn" data-action="crashLogs" data-id="${esc(d.id)}">${icon.note()}<span>${esc(t('logs.open'))}</span></button>
+        <button class="btn" data-action="openBugReport">${esc(t('bug.title'))}</button>
         <button class="btn" data-action="copyLog">${esc(t('launch.copyLog'))}</button>
         <button class="btn accent" data-action="closeDialog">${esc(t('common.close'))}</button>
       </div></div></div>`;
@@ -1535,6 +2055,64 @@ function renderOverlay() {
         <button class="btn accent" data-action="restoreBackup" data-file="${esc(d.file)}" ${d.busy ? 'disabled' : ''}>${d.busy ? '<span class="spinner"></span>' : ''}${esc(t('bk.restore'))}</button>
       </div></div></div>`;
   }
+  if (d?.type === 'prismAccounts') {
+    let body;
+    if (!d.list) body = `<div class="row"><span class="spinner"></span><span class="muted">${esc(t('prism.searching'))}</span></div>`;
+    else if (!d.list.length) body = `<p class="note">${esc(t('acc.prismNone'))}</p>`;
+    else body = `<div class="list" style="padding:0">${d.list.map((a) => `<div class="list-row">
+        <span class="avatar">${esc(a.name.charAt(0).toUpperCase())}</span>
+        <div class="stack grow" style="gap:2px"><b>${esc(a.name)}</b>
+          <span class="small ${a.fresh ? 'muted' : 'warn'}">${esc(t(a.fresh ? 'acc.prismFresh' : 'acc.prismStale'))}</span></div>
+        <button class="btn sm accent" data-action="addPrismAccount" data-id="${esc(a.id)}">${esc(t('acc.prismUse'))}</button>
+      </div>`).join('')}</div>`;
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" style="max-width:520px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('acc.prismTitle'))}</h2><p class="note">${esc(t('acc.prismHow'))}</p></div>
+      ${body}
+      <div class="row" style="justify-content:flex-end"><button class="btn" data-action="closeDialog">${esc(t('common.close'))}</button></div>
+    </div></div>`;
+  }
+  if (d?.type === 'prismRefresh') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="row" style="align-items:flex-start;gap:14px;flex-wrap:nowrap">
+        <span class="avatar" style="background:var(--accent-soft);color:var(--accent-text)">${icon.restore(20)}</span>
+        <div class="stack" style="gap:6px"><h2 id="dlg-title">${esc(t('launch.prismRefreshTitle'))}</h2><p class="note">${esc(t('launch.prismRefreshText'))}</p></div>
+      </div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="closeDialog">${esc(t('common.close'))}</button>
+        <button class="btn accent" data-action="retryLaunch" data-id="${esc(d.id)}">${esc(t('launch.prismRetry'))}</button>
+      </div></div></div>`;
+  }
+  if (d?.type === 'project') html += projectDialog(d);
+  if (d?.type === 'patch') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog project-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <h2 id="dlg-title">${esc(d.title)}</h2>
+      <div class="proj-body">${d.body === null ? '<div class="row"><span class="spinner"></span></div>' : `<div class="md">${safeMarkdown(d.body)}</div>`}</div>
+      <div class="row" style="justify-content:flex-end"><button class="btn accent" data-action="closeDialog">${esc(t('common.close'))}</button></div>
+    </div></div>`;
+  }
+  if (d?.type === 'bug') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" style="max-width:620px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('bug.title'))}</h2><p class="note">${esc(t('bug.sub'))}</p></div>
+      <div class="field"><label for="bug-what" class="label">${esc(t('bug.what'))}</label>
+        <textarea id="bug-what" class="input" rows="4" maxlength="3000" placeholder="${esc(t('bug.placeholder'))}" data-bind="dialog.text">${esc(d.text)}</textarea></div>
+      <label class="check-row" style="padding:0"><input type="checkbox" data-bug-logs ${d.withLogs ? 'checked' : ''}><span class="note">${esc(t('bug.withLogs'))}</span></label>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="closeDialog">${esc(t('common.cancel'))}</button>
+        <button class="btn" data-action="bugGithub">${esc(t('bug.github'))}</button>
+        <button class="btn accent" data-action="bugCopy">${icon.copy()}<span>${esc(t('bug.copy'))}</span></button>
+      </div></div></div>`;
+  }
+  if (d?.type === 'manual') {
+    html += `<div class="overlay" data-action="closeDialog"><div class="dialog" style="max-width:560px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop>
+      <div class="stack" style="gap:4px"><h2 id="dlg-title">${esc(t('cf.manualTitle', { n: d.list.length }))}</h2><p class="note">${esc(t('cf.manualText'))}</p></div>
+      <div class="list" style="padding:0;max-height:300px;overflow:auto">${d.list.map((f) => `<div class="list-row"><span class="grow">${esc(f.name)}</span>
+        <button class="btn sm" data-action="openUrl" data-url="${esc(f.url)}">${esc(t('cf.download'))}</button></div>`).join('')}</div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" data-action="openModsFolder" data-id="${esc(d.id)}">${icon.folder(16)}<span>${esc(t('mods.openFolder'))}</span></button>
+        <button class="btn accent" data-action="closeDialog">${esc(t('common.close'))}</button>
+      </div></div></div>`;
+  }
+  if (state.palette) html += paletteHtml();
   if (d?.type === 'renameSkin') {
     html += `<div class="overlay" data-action="closeDialog"><form class="dialog" style="max-width:440px" role="dialog" aria-modal="true" aria-labelledby="dlg-title" data-stop data-submit="renameSkinSubmit">
       <h2 id="dlg-title">${esc(t('rename.title'))}</h2>
@@ -1590,9 +2168,36 @@ function renderOverlay() {
   $('#overlay').innerHTML = html;
 }
 
+function viewMini() {
+  const cur = selected();
+  return `<div class="mini" data-tauri-drag-region style="${cur ? coverBg(cur, true) : ''}">
+    <div class="mini-inner" data-tauri-drag-region>
+      <div class="row between" data-tauri-drag-region style="flex-wrap:nowrap">
+        <span class="row" style="gap:8px" data-tauri-drag-region>${icon.moon(16)}<b data-tauri-drag-region>Spectia</b></span>
+        <span class="row" style="gap:2px;flex-wrap:nowrap">
+          <button class="winbtn" data-action="toggleMini" aria-label="${esc(t('mini.exit'))}" title="${esc(t('mini.exit'))}">${icon.maximize()}</button>
+          <button class="winbtn close" data-action="winClose" aria-label="${esc(t('win.close'))}">${icon.close()}</button>
+        </span>
+      </div>
+      ${cur ? `<label for="mini-sel" class="sr">${esc(t('inst.title'))}</label>
+        <select id="mini-sel" class="input" data-change="miniSelect">${visibleInstances().map((i) => `<option value="${esc(i.id)}" ${i.id === cur.id ? 'selected' : ''}>${esc(i.name)} · ${esc(i.gameVersion)}</option>`).join('')}</select>
+        ${state.progress[cur.id] ? progressBar(cur.id) : ''}
+        ${playButton(cur.id)}` : `<p class="note">${esc(t('home.emptyTitle'))}</p>`}
+    </div>
+  </div>`;
+}
+
 /** Перерисовывает окно. scrollTop=true — прокрутить новый экран наверх. */
 let lastView = null;
 function render(scrollTop = false) {
+  document.body.classList.toggle('is-mini', state.mini);
+  if (state.mini) {
+    $('#titlebar').innerHTML = '';
+    $('#sidebar').innerHTML = '';
+    $('#content').innerHTML = viewMini();
+    renderOverlay();
+    return;
+  }
   renderChrome();
   const content = $('#content');
   const keep = content.scrollTop;
@@ -1627,7 +2232,7 @@ async function runSearch() {
   r.loading = true; r.error = false;
   refreshResults();
   try {
-    const results = await searchModrinth({ query: r.query, kind: r.kind, gameVersion: target?.gameVersion, loader: target?.loader });
+    const results = await searchModrinth({ query: r.query, kind: r.kind, gameVersion: target?.gameVersion, loader: target?.loader, categories: r.cats });
     if (seq !== searchSeq) return; // пришёл ответ на старый запрос — пропускаем
     r.results = results;
   } catch {
@@ -1653,6 +2258,7 @@ const LAUNCH_ERRORS = {
   ELY_RELOGIN: () => t('launch.relogin'),
   PRE_LAUNCH_FAILED: () => t('launch.preLaunchFailed'),
   MS_RELOGIN: () => t('launch.msRelogin'),
+  PRISM_GONE: () => t('launch.prismGone'),
   MS_NOT_CONFIGURED: () => t('acc.msPendingSub'),
 };
 
@@ -1677,6 +2283,7 @@ async function launch(id) {
     else if (code.startsWith('NO_LOADER_FOR_VERSION')) toast(t('launch.noLoaderVersion', { loader: t('loader.' + (inst?.loader || 'fabric')), version: inst?.gameVersion }), true);
     else if (code.startsWith('LOADER_INSTALL_FAILED')) state.dialog = { type: 'crash', id, log: code.replace(/^LOADER_INSTALL_FAILED:\s*/, '') };
     else if (code.startsWith('JAVA_START_FAILED')) toast(t('launch.javaFailed'), true);
+    else if (code === 'PRISM_REFRESH') state.dialog = { type: 'prismRefresh', id };
     else if (LAUNCH_ERRORS[code]) toast(LAUNCH_ERRORS[code](), true);
     else toast(t('launch.failed', { message: code }), true);
     if (code === 'ELY_RELOGIN' || code === 'MS_RELOGIN') { state.view = 'accounts'; }
@@ -1733,9 +2340,11 @@ async function afterCoverChange(inst) {
 
 async function importFlow(path) {
   try {
-    const inst = await api.importMrpack(path);
+    const res = await api.importPack(path);
     state.importing = null;
-    if (!inst) return renderOverlay();
+    if (!res) return renderOverlay();
+    const inst = res.instance;
+    if (res.manual?.length) state.dialog = { type: 'manual', list: res.manual, id: inst.id };
     await loadInstances();
     state.selectedId = inst.id;
     state.view = 'home';
@@ -1744,7 +2353,8 @@ async function importFlow(path) {
     celebrate('done', t('notify.doneTitle'), t('inst.imported', { name: inst.name }));
   } catch (e) {
     state.importing = null;
-    toast(String(e) === 'NOT_MRPACK' ? t('inst.notMrpack') : t('error.generic', { message: e }), true);
+    const code = String(e);
+    toast(code === 'NOT_MRPACK' || code === 'NOT_A_PACK' ? t('inst.notMrpack') : code === 'CF_NO_KEY' ? t('cf.noKey') : t('error.generic', { message: e }), true);
   }
 }
 
@@ -1765,6 +2375,65 @@ async function doSaveInstance() {
   } catch (e) {
     toast(t('error.generic', { message: e }), true);
   }
+}
+
+// ---------- Музыка: один плеер на всё окно ----------
+
+const audio = new Audio();
+audio.addEventListener('play', () => { state.music.playing = true; refreshPlayer(); });
+audio.addEventListener('pause', () => { state.music.playing = false; refreshPlayer(); });
+audio.addEventListener('ended', () => nextTrack());
+
+function refreshPlayer() {
+  if (state.mini) return;
+  renderChrome();
+  if (state.view === 'music') render();
+}
+
+function musicQueue() {
+  const mu = state.music;
+  return (mu.list || []).filter((x) => mu.group === 'all' || x.group === mu.group);
+}
+
+function playTrack(track) {
+  if (!track) return;
+  if (!inApp || !track.path) return toast(t('music.previewOnly'));
+  state.music.current = track;
+  audio.src = fileUrl(track.path);
+  audio.volume = Math.min(1, (state.settings.musicVolume ?? 70) / 100);
+  audio.play().catch(() => toast(t('music.cantPlay'), true));
+  refreshPlayer();
+}
+
+function nextTrack() {
+  const list = musicQueue();
+  if (!list.length) return;
+  const at = list.findIndex((x) => x.key === state.music.current?.key);
+  const next = state.music.shuffle ? list[Math.floor(Math.random() * list.length)] : list[(at + 1) % list.length];
+  playTrack(next);
+}
+
+// ---------- Баг-репорт ----------
+
+async function bugText() {
+  const d = state.dialog || {};
+  const inst = state.edit || selected();
+  const lines = [
+    `**${t('bug.what')}**`,
+    d.text?.trim() || '—',
+    '',
+    `**Spectia** ${APP_VERSION} · ${navigator.userAgent.match(/Windows NT [\d.]+|Mac OS X [\d_]+|Linux/)?.[0] || navigator.platform}`,
+    `${t('set.theme')}: ${state.settings.theme} · ${t('set.language')}: ${state.settings.language} · ${t('look.scale')}: ${Math.round((state.settings.uiScale || 1) * 100)}%`,
+  ];
+  if (inst) lines.push(`${t('bug.instance')}: ${inst.name} · Minecraft ${inst.gameVersion} · ${inst.loader}${inst.loaderVersion ? ' ' + inst.loaderVersion : ''}`);
+  if (d.withLogs !== false && inst) {
+    let log = '';
+    try { log = (await api.gameLogs(inst.id)).launcher.split('\n').slice(-60).join('\n'); } catch { /* без лога */ }
+    // На всякий случай прячем всё, что похоже на ключи и токены
+    log = log.replace(/(--accessToken\s+|accessToken[=:]\s*|token[=:]\s*)\S+/gi, '$1***').replace(/eyJ[\w-]{10,}\.[\w-]+\.[\w-]+/g, '***');
+    if (log.trim()) lines.push('', `**${t('bug.log')}**`, '```', log, '```');
+  }
+  return lines.join('\n');
 }
 
 // ---------- Действия кнопок ----------
@@ -1875,6 +2544,9 @@ const actions = {
     state.instTab = d.tab || 'general';
     state.editSnapshots = false;
     state.mods = { id: null, list: null, loading: false, query: '', dragging: false };
+    state.modSel = new Set();
+    state.modView = 'list';
+    state.logs = { ...state.logs, id: null, data: null, query: '', filter: 'all', source: 'launcher' };
     if (!state.versions) loadVersions();
     go('instance');
   },
@@ -1917,7 +2589,8 @@ const actions = {
     state.instTab = d.tab;
     if (d.tab === 'worlds') state.worlds.list = null;
     if (d.tab === 'screens') state.shots.list = null;
-    if (d.tab === 'mods') state.mods.list = null;
+    if (d.tab === 'mods') { state.mods.list = null; state.deps.id = null; }
+    if (d.tab === 'logs') state.logs.data = null;
     render();
   },
   install: async (d) => {
@@ -2048,6 +2721,7 @@ const actions = {
       const newName = await api.toggleMod(state.edit.id, d.file);
       const m = state.mods.list.find((x) => x.file === d.file);
       if (m) { m.file = newName; m.enabled = !m.enabled; }
+      state.deps.id = null;
       render();
     } catch (e) { toast(t('error.generic', { message: e }), true); }
   },
@@ -2055,6 +2729,8 @@ const actions = {
     try {
       await api.deleteMod(state.edit.id, d.file);
       state.mods.list = state.mods.list.filter((x) => x.file !== d.file);
+      state.modSel.delete(d.file);
+      state.deps.id = null;
       render();
       toast(t('mods.deleted'));
     } catch (e) { toast(t('error.generic', { message: e }), true); }
@@ -2105,9 +2781,173 @@ const actions = {
     doSaveInstance();
   },
 
-  setKind: (d) => { state.res.kind = d.kind; state.res.results = null; runSearch(); render(); },
+  setKind: (d) => { state.res.kind = d.kind; state.res.cats = []; state.res.results = null; runSearch(); render(); },
   setSource: (d) => { state.res.source = d.source; render(); if (d.source === 'modrinth' && !state.res.results) runSearch(); },
   search: () => runSearch(),
+
+  // ---------- 0.6: аккаунт из Prism ----------
+  openPrismAccounts: async () => {
+    state.dialog = { type: 'prismAccounts', list: null };
+    renderOverlay();
+    try { state.dialog.list = await api.findPrismAccounts(); } catch { if (state.dialog) state.dialog.list = []; }
+    if (state.dialog?.type === 'prismAccounts') renderOverlay();
+  },
+  addPrismAccount: async (d) => {
+    try {
+      state.accounts = await api.addPrismAccount(d.id);
+      state.dialog = null;
+      state.skins.accountFor = null;
+      render();
+      toast(t('acc.welcome', { name: activeAccount()?.name ?? '' }));
+    } catch (e) { toast(String(e) === 'PRISM_GONE' ? t('launch.prismGone') : t('error.generic', { message: e }), true); }
+  },
+  retryLaunch: (d) => { state.dialog = null; renderOverlay(); launch(d.id); },
+
+  // ---------- 0.6: каталог ----------
+  uninstall: async (d) => {
+    const r = state.res;
+    const target = state.instances.find((i) => i.id === r.targetId) || selected();
+    if (!target) return;
+    try {
+      const removed = await api.removeProject(target.id, d.pid);
+      r.installed.delete(d.pid);
+      if (state.mods.id === target.id) state.mods.list = null;
+      state.deps.id = null;
+      toast(t('res.uninstalled', { name: removed[0] || d.title }));
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+    refreshResults();
+    if (state.dialog?.type === 'project') renderOverlay();
+  },
+  openProject: async (d) => {
+    const r = state.res;
+    const kind = d.kind || r.kind;
+    const target = state.instances.find((i) => i.id === r.targetId) || selected();
+    state.dialog = { type: 'project', id: d.pid, data: null, kind, tab: 'about' };
+    renderOverlay();
+    try {
+      const data = await projectDetails(d.pid, { gameVersion: kind === 'modpack' ? '' : target?.gameVersion, loader: target?.loader, kind });
+      if (state.dialog?.type === 'project' && state.dialog.id === d.pid) { state.dialog.data = data; renderOverlay(); }
+    } catch { if (state.dialog?.type === 'project') { state.dialog.error = true; renderOverlay(); } }
+  },
+  setProjectTab: (d) => { state.dialog.tab = d.tab; renderOverlay(); },
+  toggleCat: (d) => {
+    const c = state.res.cats;
+    state.res.cats = c.includes(d.cat) ? c.filter((x) => x !== d.cat) : [...c, d.cat];
+    state.res.results = null; render(); runSearch();
+  },
+  clearCats: () => { state.res.cats = []; state.res.results = null; render(); runSearch(); },
+
+  // ---------- 0.6: моды ----------
+  setModView: (d) => { state.modView = d.v; if (d.v === 'history') state.history.list = null; render(); },
+  bulkClear: () => { state.modSel = new Set(); render(); },
+  bulkMods: async (d) => {
+    const files = [...state.modSel];
+    const id = state.edit.id;
+    let n = 0;
+    for (const file of files) {
+      const m = state.mods.list.find((x) => x.file === file);
+      if (!m) continue;
+      try {
+        if (d.op === 'delete') { await api.deleteMod(id, file); n++; }
+        else if ((d.op === 'enable') !== m.enabled) { await api.toggleMod(id, file); n++; }
+      } catch (e) { toast(t('error.generic', { message: e }), true); }
+    }
+    state.modSel = new Set();
+    state.deps.id = null;
+    await loadMods(id);
+    toast(t('bulk.done', { n }));
+  },
+  installDep: async (d) => {
+    const id = state.edit.id;
+    state.res.installing[d.pid] = true; render();
+    try {
+      const res = await api.installProject(id, d.pid);
+      toast(t('res.installedToast', { list: res.installed.join(', ') || d.title }));
+      state.deps.id = null; state.mods.list = null;
+    } catch (e) { toast(t('error.generic', { message: e }), true); }
+    delete state.res.installing[d.pid]; render();
+  },
+
+  // ---------- 0.6: логи ----------
+  reloadLogs: () => { state.logs.data = null; render(); },
+  setLogSource: (d) => { state.logs.source = d.v; render(); },
+  setLogFilter: (d) => { state.logs.filter = d.v; render(); },
+  copyLogs: async () => {
+    try { await navigator.clipboard.writeText(currentLogText() || ''); toast(t('launch.copied')); } catch { /* ничего */ }
+  },
+  openLogsFolder: async () => {
+    if (!inApp) return toast(t('common.comingSoon'));
+    try { await api.openInstanceFolder(state.edit.id, 'logs'); } catch (e) { toast(t('error.generic', { message: e }), true); }
+  },
+  crashLogs: (d) => {
+    state.dialog = null; renderOverlay();
+    actions.openInstance({ id: d.id, tab: 'logs' });
+  },
+
+  // ---------- 0.6: новости ----------
+  setNewsTab: (d) => { state.news.tab = d.tab; render(); },
+  reloadNews: () => { state.news.list = null; render(); },
+  openNews: async (d) => {
+    const item = state.news.list.find((x) => x.id === d.id);
+    if (!item) return;
+    if (item.url) return openUrl(item.url);
+    state.dialog = { type: 'patch', title: item.title, body: null };
+    renderOverlay();
+    try { state.dialog.body = await api.patchNoteBody(item.contentPath); } catch { state.dialog.body = item.text; }
+    if (state.dialog?.type === 'patch') renderOverlay();
+  },
+  checkAllUpdates: async () => {
+    state.allUpdates = { busy: true, list: null }; render();
+    const out = [];
+    for (const inst of visibleInstances().filter((i) => i.loader !== 'vanilla')) {
+      try {
+        const updates = await api.checkModUpdates(inst.id);
+        if (updates.length) out.push({ id: inst.id, name: inst.name, updates });
+      } catch { /* нет сети — пропустим сборку */ }
+    }
+    state.allUpdates = { busy: false, list: out }; render();
+  },
+
+  // ---------- 0.6: музыка ----------
+  setMusicGroup: (d) => { state.music.group = d.g; render(); },
+  playTrack: (d) => playTrack(state.music.list.find((x) => x.key === d.key)),
+  playAll: () => {
+    const list = musicQueue();
+    playTrack(state.music.shuffle ? list[Math.floor(Math.random() * list.length)] : list[0]);
+  },
+  toggleShuffle: () => { state.music.shuffle = !state.music.shuffle; render(); },
+  musicToggle: () => { if (audio.paused) audio.play().catch(() => {}); else audio.pause(); },
+  musicNext: () => nextTrack(),
+  musicStop: () => { audio.pause(); audio.removeAttribute('src'); state.music.current = null; state.music.playing = false; render(); },
+
+  // ---------- 0.6: мини-режим, Ctrl+K, баг-репорт ----------
+  toggleMini: async () => {
+    state.mini = !state.mini;
+    try { await api.setMini(state.mini); } catch { /* в браузере просто меняем вид */ }
+    render(true);
+  },
+  openPalette: () => {
+    state.palette = { query: '', sel: 0 };
+    renderOverlay();
+    $('#pal-input')?.focus();
+  },
+  closePalette: () => { state.palette = null; renderOverlay(); },
+  palRun: (d) => paletteResults()[Number(d.n)]?.run(),
+  openBugReport: () => {
+    state.dialog = { type: 'bug', text: '', withLogs: true };
+    renderOverlay();
+    $('#bug-what')?.focus();
+  },
+  bugCopy: async () => {
+    const text = await bugText();
+    try { await navigator.clipboard.writeText(text); toast(t('bug.copied')); state.dialog = null; renderOverlay(); }
+    catch { toast(t('error.generic', { message: 'clipboard' }), true); }
+  },
+  bugGithub: async () => {
+    const text = (await bugText()).slice(0, 6000);
+    const title = (state.dialog.text || '').split('\n')[0].slice(0, 80) || t('bug.defaultTitle');
+    openUrl(`${REPO_URL}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(text)}`);
+  },
 
   // ---------- 0.5: датапаки ----------
   installToWorld: async (d) => {
@@ -2426,6 +3266,8 @@ const changes = {
   createVersion: () => { state.create.loaderVersion = ''; render(); },
   editVersion: () => { state.edit.loaderVersion = ''; render(); },
   setLanguage: (value) => { state.settings.language = value; applySettings(); render(); saveSettings(); },
+  setModSort: (value) => { state.modSort = value; render(); },
+  miniSelect: (value) => { state.selectedId = value; render(); },
   setTarget: (value) => { state.res.targetId = value; state.res.results = null; runSearch(); },
 };
 
@@ -2450,6 +3292,7 @@ document.addEventListener('input', (ev) => {
   const out = el.type === 'range' && document.getElementById(el.id + '-out');
   if (out) out.textContent = el.value + (el.dataset.unit || '');
   if ('live' in el.dataset) applyAppearance(state.settings);
+  if (el.id === 'musvol') audio.volume = Math.min(1, value / 100);
   if ('liveTheme' in el.dataset && state.dialog?.type === 'themeEditor') {
     const d = state.dialog;
     applyAppearance(state.settings, d);
@@ -2459,6 +3302,8 @@ document.addEventListener('input', (ev) => {
     if (low !== !!d.lowContrast) { d.lowContrast = low; renderOverlay(); }
   }
   if ('filterMods' in el.dataset) filterModRows();
+  if ('palette' in el.dataset && state.palette) { state.palette.sel = 0; $('#pal-list').innerHTML = paletteListHtml(); }
+  if ('logSearch' in el.dataset) { const v = $('#log-view'); if (v) v.innerHTML = logLinesHtml(currentLogText()); }
   if ('search' in el.dataset) {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(runSearch, 350);
@@ -2480,6 +3325,17 @@ document.addEventListener('change', (ev) => {
     return;
   }
   if ('accentPicker' in el.dataset) { actions.setAccent({ color: el.value }); return; }
+  if (el.dataset.sel !== undefined) {
+    if (el.checked) state.modSel.add(el.dataset.sel); else state.modSel.delete(el.dataset.sel);
+    render();
+    return;
+  }
+  if ('selall' in el.dataset) {
+    state.modSel = el.checked ? new Set((state.mods.list || []).filter((x) => modMatches(x)).map((x) => x.file)) : new Set();
+    render();
+    return;
+  }
+  if ('bugLogs' in el.dataset && state.dialog?.type === 'bug') { state.dialog.withLogs = el.checked; return; }
   if (el.id === 'theme-file' && el.files?.[0]) {
     const file = el.files[0];
     file.text().then((text) => {
@@ -2522,7 +3378,7 @@ document.addEventListener('contextmenu', (ev) => {
 onFileDrop(async (p) => {
   const onMods = state.view === 'instance' && state.instTab === 'mods' && state.edit && state.edit.loader !== 'vanilla';
   if (p.type === 'drop' && !onMods) {
-    const pack = (p.paths || []).find((f) => /\.mrpack$/i.test(f));
+    const pack = (p.paths || []).find((f) => /\.(mrpack|zip)$/i.test(f));
     if (pack) importFlow(pack);
     return;
   }
@@ -2550,6 +3406,23 @@ document.addEventListener('submit', (ev) => {
 });
 
 document.addEventListener('keydown', (ev) => {
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k' || (ev.ctrlKey && ev.code === 'KeyK')) {
+    ev.preventDefault();
+    if (state.palette) actions.closePalette(); else if (!state.mini) actions.openPalette();
+    return;
+  }
+  if (state.palette) {
+    const n = paletteResults().length;
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      state.palette.sel = (state.palette.sel + (ev.key === 'ArrowDown' ? 1 : n - 1)) % Math.max(n, 1);
+      $('#pal-list').innerHTML = paletteListHtml();
+      return;
+    }
+    if (ev.key === 'Enter') { ev.preventDefault(); paletteResults()[state.palette.sel]?.run(); return; }
+    if (ev.key === 'Escape') { actions.closePalette(); return; }
+  }
+  if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches?.('[data-action][tabindex]')) { ev.preventDefault(); ev.target.click(); return; }
   if (ev.key === 'Escape' && state.ctx) actions.closeCtx();
   else if (ev.key === 'Escape' && state.dialog) actions.closeDialog();
 });

@@ -40,7 +40,13 @@
 - [x] Избранное, папки, теги, архив и заметки для сборок
 - [x] Фон-картинка, акцентный цвет, масштаб, размер текста, скругления, плотность
 - [x] Колокольчик и уведомления Windows
-- [ ] Импорт сборок CurseForge и Prism-zip
+- [x] Лицензия через вход Prism Launcher
+- [x] Новости Minecraft и модов, музыка игры с плеером
+- [x] Подробности о модах, категории, история и зависимости модов, массовые действия
+- [x] Spectia Doctor и понятные логи
+- [x] Импорт Prism / MultiMC .zip и CurseForge .zip
+- [x] Ctrl + K, мини-режим, статус в Discord, график недели
+- [ ] CurseForge в каталоге (ждём ключ API)
 
 Что планируется дальше — в [ROADMAP.md](ROADMAP.md).
 
@@ -59,6 +65,7 @@ src/                 интерфейс
   js/appearance.js   свои темы, фон, масштаб
   js/skinview.js     плоский предпросмотр скина
   js/sound.js        колокольчик
+  js/doctor.js       Spectia Doctor: разбор логов
   i18n/ru.js, en.js  переводы
 src-tauri/           Rust-часть
   src/instances.rs   сборки
@@ -69,6 +76,12 @@ src-tauri/           Rust-часть
   src/skins.rs       скины и плащи
   src/prism.rs       перенос из Prism Launcher
   src/stats.rs       статистика игровых сессий (только на компьютере)
+  src/history.rs     история изменений модов
+  src/music.rs       музыка из файлов игры
+  src/news.rs        новости Minecraft
+  src/discord.rs     статус в Discord
+  src/curseforge.rs  импорт сборок CurseForge
+  src/window.rs      мини-режим
   src/game.rs        файлы игры: библиотеки, ассеты, аргументы
   src/java.rs        Java от Mojang
   src/launch.rs      запуск игры
